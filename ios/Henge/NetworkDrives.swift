@@ -274,7 +274,6 @@ struct NetworkDrivesView: View {
 
             QuickSetupSection(first: store.drives.isEmpty,
                               scan: DataScannerViewController.isSupported ? { scanning = true } : nil)
-            AwayFromHomeSection()
 
             if running, !store.drives.isEmpty, oldHelper, let type {
                 Section {
@@ -622,11 +621,11 @@ struct NetworkDrivesGuide: View {
     private var awayFromHome: some View {
         steps("Away from home", [
             "File sharing must never be opened to the internet. Use Tailscale, a free private network between your own devices, instead.",
-            "Install Tailscale on the computer and sign in (the one-step PC setup does this).",
+            "Install Tailscale on the computer and sign in (the one-step PC setup does this when run with -Tailscale at the end).",
             "Install Tailscale on this \(Device.name) from the App Store and sign in with the same account. The virtual Mac reaches whatever this \(Device.name) reaches, so it doesn't need Tailscale itself.",
             "iOS runs one VPN at a time, and Henge's JIT uses LocalDevVPN: start the Mac with LocalDevVPN connected, then switch to Tailscale.",
             "The computer's Tailscale address (100.x.y.z) goes after its home address, separated by a comma: the one-step setup does this. The Mac tries the home address first, then Tailscale.",
-        ], footer: "If switching VPNs gets in the way, Tailscale can run inside the virtual Mac instead: Details, Computers, More Options, Type the Tailscale Command.")
+        ], footer: "Not needed at home: on the same Wi-Fi as the computer, none of this applies.")
     }
 
     private var trouble: some View {
@@ -663,9 +662,7 @@ struct AddedComputer: Identifiable {
     var title: String { updated ? "\(name) Updated" : "\(name) Added" }
     var message: String {
         "On the Mac, it's in Finder under Henge Drives in your home folder, and in every Save dialog. "
-            + "If the Mac is already running, it shows up within a few seconds.\n\n"
-            + "On the same Wi-Fi as the PC, that's all. Away from home, this \(Device.name) needs the Tailscale app, "
-            + "signed in with the same account as the PC (Settings, Computers, Away From Home)."
+            + "If the Mac is already running, it shows up within a few seconds."
     }
 }
 
@@ -793,16 +790,6 @@ struct ComputersMoreView: View {
                 Text("For a Mac, Linux or a NAS, or to set a PC up yourself.")
             }
             .listRowBackground(Desk.card)
-            if let type {
-                Section {
-                    Button { type(Sharing.tailscaleCommand) } label: { Label("Type the Tailscale Command", systemImage: "globe") }
-                } header: {
-                    Text("Instead of Tailscale on the \(Device.name) (Experimental)")
-                } footer: {
-                    Text("If switching between LocalDevVPN and Tailscale on the \(Device.name) gets in the way, Tailscale can run inside the Mac instead. Open Terminal on the Mac, tap this, press Return and type the Mac's password. The sign-in link lands on this \(Device.name)'s clipboard: open it in Safari and sign in with the same account as your PC.")
-                }
-                .listRowBackground(Desk.card)
-            }
             Section {
                 Text("To undo the PC's setup, run the same line on it with -Remove at the end.")
                     .font(.footnote).foregroundStyle(.secondary)

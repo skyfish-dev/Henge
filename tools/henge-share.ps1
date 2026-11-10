@@ -4,11 +4,13 @@
 #
 # It shares the folder (the Desktop unless you pick another) with a separate sign-in that can only reach that
 # folder, lets file sharing through the firewall from this network and from Tailscale only, sets up
-# Tailscale for using it away from home (unless -NoTailscale), then shows a code: scan it with the iPhone's
+# Tailscale for using it away from home (only with -Tailscale), then shows a code: scan it with the iPhone's
 # Camera (or in Henge, Settings, Computers, Scan Code) and Henge adds the PC, nothing to fill in. Run it again any time; it picks up where it left off.
 # To undo it: run it with -Remove.
 
-param([string]$Folder = "", [switch]$Remove, [switch]$NoTailscale)
+param([string]$Folder = "", [switch]$Remove, [switch]$Tailscale, [switch]$NoTailscale)
+# Tailscale (saving to this PC away from home) only when asked for: -Tailscale.
+$NoTailscale = -not $Tailscale
 
 $ErrorActionPreference = "Stop"
 $ScriptUrl = "https://raw.githubusercontent.com/skyfish-dev/Henge/pointer-follow/tools/henge-share.ps1"
@@ -37,7 +39,7 @@ if (-not $admin) {
     else { Invoke-RestMethod $ScriptUrl -OutFile $self } # run as irm ... | iex: fetch it again to run as a file
     $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", "`"$self`"", "-Folder", "`"$Folder`"")
     if ($Remove) { $arguments += "-Remove" }
-    if ($NoTailscale) { $arguments += "-NoTailscale" }
+    if ($Tailscale) { $arguments += "-Tailscale" }
     Say "Henge needs to change sharing settings: choose Yes when Windows asks." Yellow
     Start-Process powershell -Verb RunAs -ArgumentList $arguments
     return
@@ -215,6 +217,17 @@ $name = $env:COMPUTERNAME
 if ($Leaf -ne "Desktop") { $name = "$name $Leaf" }
 $link = "henge://computer?n=$(Enc $name)&h=$(Enc ($hosts -join ','))&s=$(Enc $Share)&u=$(Enc $User)&p=$(Enc $Password)"
 
+$awayHtml = ""
+if ($TailscaleIP) {
+    $awayHtml = @"
+<div style="text-align:left;background:#1a1c24;border-radius:12px;padding:14px 18px;margin:16px 0;color:#c9ccd6;line-height:1.6">
+<b>On the same Wi-Fi as this PC:</b> nothing else to do.<br>
+<b>Away from home:</b> install <b>Tailscale</b> on the iPhone (App Store) and sign in with the <b>same account</b> you used on this PC. The virtual Mac doesn't need it.<br>
+<small>iOS runs one VPN at a time: start the Mac with LocalDevVPN connected (for JIT), then switch to Tailscale.</small>
+</div>
+"@
+}
+
 # The code is drawn in the browser, on this PC: the page loads a QR code library and nothing leaves the PC.
 $page = Join-Path $env:TEMP "henge-code.html"
 $linkJs = $link -replace '\\', '\\' -replace "'", "\'"
@@ -239,11 +252,7 @@ small{color:#6a6f7e}
 <li>Point the iPhone's <b>Camera</b> at the code and tap <b>Open in Henge</b>.<br><small>Or in Henge: Settings, Computers, Scan Code.</small></li>
 <li>That's it. On the virtual Mac, this PC is in <b>Henge Drives</b> in your home folder, and in every Save dialog.</li>
 </ol>
-<div style="text-align:left;background:#1a1c24;border-radius:12px;padding:14px 18px;margin:16px 0;color:#c9ccd6;line-height:1.6">
-<b>On the same Wi-Fi as this PC:</b> nothing else to do.<br>
-<b>Away from home:</b> install <b>Tailscale</b> on the iPhone (App Store) and sign in with the <b>same account</b> you used on this PC. The virtual Mac doesn't need it.<br>
-<small>iOS runs one VPN at a time: start the Mac with LocalDevVPN connected (for JIT), then switch to Tailscale.</small>
-</div>
+$awayHtml
 <p><small>The code holds the password for the Henge sign-in on this PC. Close this page when you're done.</small></p>
 </main><script>
 var q = qrcode(0, 'M'); q.addData('$linkJs'); q.make();
@@ -263,8 +272,6 @@ Say "  Same Wi-Fi as this PC: nothing else to do." White
 if ($TailscaleIP) {
     Say "  Away from home: install Tailscale on the iPhone and sign in with the SAME account as this PC." White
     Say "  iOS runs one VPN at a time: start the Mac with LocalDevVPN, then switch to Tailscale."
-} else {
-    Say "  Away from home: not set up (Tailscale was skipped). Run this again to add it." Yellow
 }
 Say ""
 Say "  To undo all of it later: run this again with -Remove"
