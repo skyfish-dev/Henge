@@ -396,9 +396,15 @@ void hv_vm_key_hid(uint8_t usage, int down) {
 static void move_now(void *ctx) {
     int64_t packed = (int64_t)(intptr_t)ctx;
     int32_t dx = (int32_t)(packed >> 32), dy = (int32_t)packed;
-    if (dx) hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, dx);
-    if (dy) hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_Y, dy);
-    hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+    /* The guest takes a move as 8 bits, as it does the wheel: +200 arrives as -56, the wrong way.
+       So big moves go in pieces. */
+    do {
+        int32_t px = dx > 120 ? 120 : dx < -120 ? -120 : dx, py = dy > 120 ? 120 : dy < -120 ? -120 : dy;
+        if (px) hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, px);
+        if (py) hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_Y, py);
+        hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+        dx -= px, dy -= py;
+    } while (dx || dy);
 }
 
 void hv_vm_mouse_move(int dx, int dy) {

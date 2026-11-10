@@ -34,6 +34,9 @@ final class PointerFollow: NSObject {
     private var gain: Double = 1                 // pixels the Mac's pointer goes for each unit sent
     private var sent: (dx: Int32, dy: Int32, fromX: Int32, fromY: Int32, at: CFTimeInterval)?
     private var stuck = 0                        // moves the pointer didn't answer
+    private var limit: Int32 = PointerFollow.furthest // the most sent at once: less after going past the place
+    /// The most a single move carries. The Mac takes a move as 8 bits, and accelerates big ones a lot.
+    private static let furthest: Int32 = 120
     private var pending: [() -> Void] = []
     private var deadline: CFTimeInterval = 0     // pending actions run by then, arrived or not
     private var idleSince: CFTimeInterval = 0
@@ -102,6 +105,7 @@ final class PointerFollow: NSObject {
         flush()
         target = nil
         sent = nil
+        limit = Self.furthest
         link?.invalidate()
         link = nil
     }
@@ -152,7 +156,12 @@ final class PointerFollow: NSObject {
                 let alongX = abs(s.dx) >= abs(s.dy)
                 let d = Double(abs(alongX ? s.dx : s.dy)), m = Double(abs(alongX ? movedX : movedY))
                 let atEdge = x <= 0 || y <= 0 || x >= Int32(screen.width) - 1 || y >= Int32(screen.height) - 1
-                if d >= 3, m > 0, !atEdge { gain = min(max(0.5 * gain + 0.5 * m / d, 0.2), 5) }
+                if d >= 2, m > 0, !atEdge { gain = min(max(0.5 * gain + 0.5 * m / d, 0.2), 12) }
+                // Gone past the place: macOS sped the move up more than was learnt. Smaller moves, which
+                // it speeds up less, until they stop going past; then bigger ones again.
+                let pastX = abs(s.dx) >= 2 && abs(ex) > 2 && (t.x - s.fromX > 0) != (ex > 0)
+                let pastY = abs(s.dy) >= 2 && abs(ey) > 2 && (t.y - s.fromY > 0) != (ey > 0)
+                limit = pastX || pastY ? max(6, limit / 2) : min(Self.furthest, limit + limit / 4 + 1)
             }
             sent = nil
         }
@@ -164,11 +173,18 @@ final class PointerFollow: NSObject {
             return
         }
         if !pending.isEmpty, now >= deadline { flush() }
-        var dx = Int32((Double(ex) / gain).rounded()), dy = Int32((Double(ey) / gain).rounded())
+        // A little short of the whole way: falling short costs one more move, going past costs several.
+        var dx = Int32((0.85 * Double(ex) / gain).rounded()), dy = Int32((0.85 * Double(ey) / gain).rounded())
         if dx == 0 && ex != 0 { dx = ex > 0 ? 1 : -1 }
         if dy == 0 && ey != 0 { dy = ey > 0 ? 1 : -1 }
-        dx = min(max(dx, -400), 400)
-        dy = min(max(dy, -400), 400)
+        // One scale for both, so the pointer heads straight for the place.
+        let most = max(abs(dx), abs(dy))
+        if most > limit {
+            let scale = Double(limit) / Double(most)
+            let sx = Int32((Double(dx) * scale).rounded()), sy = Int32((Double(dy) * scale).rounded())
+            dx = sx == 0 && dx != 0 ? (dx > 0 ? 1 : -1) : sx
+            dy = sy == 0 && dy != 0 ? (dy > 0 ? 1 : -1) : sy
+        }
         henge_vm_mouse_move(dx, dy)
         sent = (dx, dy, x, y, now)
         idleSince = now
