@@ -16,4 +16,10 @@ char *hv_share_take_clipboard(void);
 /* Seconds since the helper in macOS was last heard from, or -1 if it never has been. */
 long hv_share_agent_seen(void);
 
+/* Computers on the network whose shared folders the helper keeps mounted in macOS, one a line:
+   name TAB smb-host TAB share TAB user TAB password. Any thread, before or during a session. */
+void hv_share_set_drives(const char *text);
+/* The helper's last report, one line a drive: name TAB "ok" or an error. A malloc'd string, or NULL before any. */
+char *hv_share_drive_status(void);
+
 #endif

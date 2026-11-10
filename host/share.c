@@ -5,7 +5,9 @@
    10.0.2.4:80 to a Unix socket in the app's own storage: no TCP port is open, so other apps can't reach this.
 
    /.henge/ is not part of the folder. It has the clipboard, where the helper inside macOS (tools/henge-agent.m)
-   waits for the device's clipboard and sends the guest's, and what it takes to install that helper.
+   waits for the device's clipboard and sends the guest's, and what it takes to install that helper. It also has
+   the computers on the network whose shared folders the helper keeps mounted (the app's Settings, Computers),
+   and how mounting them went.
 
    Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
 #include "share.h"
@@ -68,6 +70,27 @@ long hv_share_agent_seen(void) {
     long ago = agent_seen ? (long)(time(NULL) - agent_seen) : -1;
     pthread_mutex_unlock(&clip_mu);
     return ago;
+}
+
+/* ---- network drives ---- */
+
+/* The app's list, one drive a line (see hv_share_set_drives), and the helper's report on it. */
+static pthread_mutex_t drives_mu = PTHREAD_MUTEX_INITIALIZER;
+static char *drives_list;
+static char *drives_status;
+
+void hv_share_set_drives(const char *text) {
+    pthread_mutex_lock(&drives_mu);
+    free(drives_list);
+    drives_list = text ? strdup(text) : NULL;
+    pthread_mutex_unlock(&drives_mu);
+}
+
+char *hv_share_drive_status(void) {
+    pthread_mutex_lock(&drives_mu);
+    char *text = drives_status ? strdup(drives_status) : NULL;
+    pthread_mutex_unlock(&drives_mu);
+    return text;
 }
 
 /* ---- connections ---- */
@@ -707,6 +730,31 @@ static int clipboard_put(Conn *c, Request *r) {
     return respond_empty(c, r, 204, "No Content");
 }
 
+/* GET: the drives the helper keeps mounted. Only the guest reaches this server (the network hands it a Unix socket
+   in the app's own storage), and the helper needs the passwords to mount them. */
+static int drives_get(Conn *c, Request *r) {
+    if (body_discard(c, r) != 0) return -1;
+    pthread_mutex_lock(&drives_mu);
+    char *text = strdup(drives_list ? drives_list : "");
+    pthread_mutex_unlock(&drives_mu);
+    if (!text) return -1;
+    int rc = respond(c, r, 200, "OK", "Content-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n", text, strlen(text));
+    free(text);
+    return rc;
+}
+
+/* PUT: how mounting them went, a line each (see tools/henge-agent.m). */
+static int drives_status_put(Conn *c, Request *r) {
+    size_t len = 0;
+    char *text = body_small(c, r, &len);
+    if (!text) return -1;
+    pthread_mutex_lock(&drives_mu);
+    free(drives_status);
+    drives_status = text;
+    pthread_mutex_unlock(&drives_mu);
+    return respond_empty(c, r, 204, "No Content");
+}
+
 static int serve_henge(Conn *c, Request *r) {
     const char *what = r->path + strlen("/.henge/");
     if (!strcmp(what, "install") && !strcmp(r->method, "GET")) {
@@ -721,6 +769,8 @@ static int serve_henge(Conn *c, Request *r) {
     if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);
+    if (!strcmp(what, "drives") && !strcmp(r->method, "GET")) return drives_get(c, r);
+    if (!strcmp(what, "drives-status") && !strcmp(r->method, "PUT")) return drives_status_put(c, r);
     if (body_discard(c, r) != 0) return -1;
     return respond_empty(c, r, 404, "Not Found");
 }

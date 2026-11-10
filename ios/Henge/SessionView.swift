@@ -513,6 +513,17 @@ struct SessionView: View {
                 }
                 Section("Sharing") {
                     LabeledContent("Clipboard and folder", value: helperRunning ? "On" : "Not set up")
+                    NavigationLink {
+                        NetworkDrivesView(running: true, typeSetUp: {
+                            showDetails = false
+                            Task {
+                                try? await Task.sleep(nanoseconds: 600_000_000)
+                                await Sharing.typeSetUpCommand()
+                            }
+                        })
+                    } label: {
+                        LabeledContent("Computers", value: NetworkDrives.shared.drives.isEmpty ? "None" : "\(NetworkDrives.shared.drives.count)")
+                    }
                     if !helperRunning {
                         Button("Type the Set Up Command") {
                             showDetails = false

@@ -19,6 +19,7 @@ enum Sharing {
         // A Unix socket's path can't be long, so the short temporary folder.
         let socket = (NSTemporaryDirectory() as NSString).appendingPathComponent("s.sock")
         henge_vm_share(folder.path, socket, Bundle.main.path(forResource: "henge-agent", ofType: "gz"))
+        NetworkDrives.shared.sessionStarting()
     }
 
     /// The helper asks the server for news at most 25 s apart.

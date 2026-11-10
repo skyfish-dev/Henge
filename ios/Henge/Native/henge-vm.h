@@ -47,6 +47,9 @@ void henge_vm_share(const char *folder, const char *socket_path, const char *age
 void henge_share_set_clipboard(const char *text);
 char *henge_share_take_clipboard(void);
 long henge_share_agent_seen(void);
+/* Network drives for the helper to mount (host/share.h, hv_share_set_drives), and its report on them. */
+void henge_share_set_drives(const char *text);
+char *henge_share_drive_status(void);
 
 /* The size macOS is told its screen is. Before henge_vm_boot. */
 void henge_vm_set_display(uint32_t width, uint32_t height);

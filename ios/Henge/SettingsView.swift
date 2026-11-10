@@ -61,6 +61,18 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
+                Section {
+                    NavigationLink {
+                        NetworkDrivesView()
+                    } label: {
+                        Label("Computers", systemImage: "desktopcomputer")
+                    }
+                } header: {
+                    Text("Save to Your Computer")
+                } footer: {
+                    Text("Let the Mac save files straight to your laptop or desktop, such as its Desktop folder, over Wi-Fi or from anywhere with Tailscale.")
+                }
+                .listRowBackground(Desk.card)
                 Section("Mouse") {
                     Picker("Match iOS's pointer", selection: $followMode) {
                         ForEach(PointerFollow.Mode.allCases) { Text($0.title).tag($0.rawValue) }

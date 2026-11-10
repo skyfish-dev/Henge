@@ -1,5 +1,6 @@
 // Runs inside macOS on a Henge virtual Mac, as a LaunchAgent. It keeps the clipboard in step with the device,
-// and keeps the shared folder mounted. It talks to host/share.c at 10.0.2.4, which only exists inside Henge.
+// keeps the shared folder mounted, and keeps the shared folders of the computers set up in the app (Settings,
+// Computers) mounted in ~/Henge Drives, so that apps on the Mac can save straight to them. It talks to host/share.c at 10.0.2.4, which only exists inside Henge.
 #import <AppKit/AppKit.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -118,11 +119,111 @@ static void keepMounted(void) {
     [task launchAndReturnError:NULL];
 }
 
+// ---- computers on the network ----
+
+static NSString *drivesFolder(void) { return [NSHomeDirectory() stringByAppendingPathComponent:@"Henge Drives"]; }
+
+// Something else's volume is mounted on the folder.
+static BOOL isMounted(NSString *point) {
+    struct stat folder, parent;
+    if (stat(point.fileSystemRepresentation, &folder) != 0) return NO;
+    if (stat(point.stringByDeletingLastPathComponent.fileSystemRepresentation, &parent) != 0) return NO;
+    return folder.st_dev != parent.st_dev;
+}
+
+// What a user name or password can hold in an smb:// URL.
+static NSString *escaped(NSString *s) {
+    NSMutableCharacterSet *allowed = [NSMutableCharacterSet alphanumericCharacterSet];
+    [allowed addCharactersInString:@"-._~"];
+    return [s stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: @"";
+}
+
+// A tool's exit status and the last thing it said, or -1 if it didn't finish in time (an address that doesn't answer).
+static int runTool(NSString *path, NSArray<NSString *> *arguments, NSString **said) {
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:path];
+    task.arguments = arguments;
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = NSFileHandle.fileHandleWithNullDevice;
+    task.standardError = pipe;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    task.terminationHandler = ^(NSTask *t) { (void)t; dispatch_semaphore_signal(done); };
+    if (![task launchAndReturnError:NULL]) return -1;
+    if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 25 * NSEC_PER_SEC)) != 0) {
+        [task terminate];
+        if (said) *said = @"The computer didn't answer. Is it on, and on the same network?";
+        return -1;
+    }
+    NSData *out = [pipe.fileHandleForReading readDataToEndOfFile];
+    NSString *text = [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding];
+    NSArray *lines = [[text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsSeparatedByString:@"\n"];
+    if (said) *said = lines.lastObject ?: @"";
+    return task.terminationStatus;
+}
+
+// mount_smbfs says what went wrong in its own words; these are the ones people meet.
+static NSString *plainError(NSString *said) {
+    NSString *s = said.lowercaseString;
+    if ([s containsString:@"authentication"] || [s containsString:@"permission denied"]) return @"The user name or password was refused.";
+    if ([s containsString:@"no route"] || [s containsString:@"unreachable"] || [s containsString:@"timed out"]) return @"The computer couldn't be reached.";
+    if ([s containsString:@"not found"] || [s containsString:@"no such file"]) return @"No shared folder by that name on that computer.";
+    if ([s containsString:@"resolve"] || [s containsString:@"unknown host"]) return @"No computer by that name: try its IP address.";
+    return said.length ? said : @"It couldn't be connected.";
+}
+
+// The app's list (host/share.c, /.henge/drives): name TAB host TAB share TAB user TAB password, a line each.
+// Each is kept mounted on ~/Henge Drives/<name>; one taken off the list is unmounted. How it went goes back.
+static void keepDrivesMounted(void) {
+    int status = 0;
+    NSData *body = request(@"GET", @"/.henge/drives", nil, &status, NULL);
+    if (!body || status != 200) return;
+    NSString *text = [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding] ?: @"";
+    NSString *folder = drivesFolder();
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSMutableSet<NSString *> *wanted = [NSMutableSet set];
+    NSMutableString *report = [NSMutableString string];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        NSArray<NSString *> *f = [line componentsSeparatedByString:@"\t"];
+        if (f.count < 5) continue;
+        NSString *name = [[f[0] stringByReplacingOccurrencesOfString:@"/" withString:@"-"] stringByReplacingOccurrencesOfString:@":" withString:@"-"];
+        if (!name.length || [name hasPrefix:@"."] || !f[1].length || !f[2].length) continue;
+        [wanted addObject:name];
+        NSString *point = [folder stringByAppendingPathComponent:name];
+        [files createDirectoryAtPath:point withIntermediateDirectories:YES attributes:nil error:NULL];
+        if (isMounted(point)) {
+            [report appendFormat:@"%@\tok\n", name];
+            continue;
+        }
+        NSString *user = f[3].length ? escaped(f[3]) : @"guest";
+        NSString *share = [f[2] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet] ?: f[2];
+        NSString *url = [NSString stringWithFormat:@"//%@:%@@%@/%@", user, escaped(f[4]), f[1], share];
+        NSString *said = nil;
+        int rc = runTool(@"/sbin/mount_smbfs", @[ @"-N", url, point ], &said);
+        if (rc == 0 || isMounted(point)) [report appendFormat:@"%@\tok\n", name];
+        else [report appendFormat:@"%@\t%@\n", name, [plainError(said) stringByReplacingOccurrencesOfString:@"\t" withString:@" "]];
+    }
+    // Drives no longer on the list: let go of them, and of their empty folders.
+    for (NSString *name in [files contentsOfDirectoryAtPath:folder error:NULL] ?: @[]) {
+        if ([wanted containsObject:name] || [name hasPrefix:@"."]) continue;
+        NSString *point = [folder stringByAppendingPathComponent:name];
+        if (isMounted(point)) runTool(@"/sbin/umount", @[ point ], NULL);
+        if (!isMounted(point)) rmdir(point.fileSystemRepresentation);
+    }
+    if (report.length) request(@"PUT", @"/.henge/drives-status", [report dataUsingEncoding:NSUTF8StringEncoding], &status, NULL);
+}
+
 int main(void) {
     @autoreleasepool {
         lastChange = NSPasteboard.generalPasteboard.changeCount;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ followDevice(); });
         keepMounted();
+        // One at a time, off the main thread: a computer that doesn't answer can hold a mount for a while.
+        dispatch_queue_t drives = dispatch_queue_create("henge.drives", DISPATCH_QUEUE_SERIAL);
+        dispatch_async(drives, ^{ keepDrivesMounted(); });
+        [NSTimer scheduledTimerWithTimeInterval:15 repeats:YES block:^(NSTimer *timer) {
+            (void)timer;
+            dispatch_async(drives, ^{ keepDrivesMounted(); });
+        }];
         [NSTimer scheduledTimerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer) { (void)timer; checkClipboard(); }];
         [NSTimer scheduledTimerWithTimeInterval:30 repeats:YES block:^(NSTimer *timer) { (void)timer; keepMounted(); }];
         [NSRunLoop.mainRunLoop run];
