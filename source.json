@@ -27,6 +27,15 @@
       ],
       "versions": [
         {
+          "version": "0.2.108",
+          "buildVersion": "108",
+          "date": "2026-11-10T06:06:48Z",
+          "localizedDescription": "Built from pointer-follow at c1cd64c.\n\n## Changes\n- Computers: saves wait on the Mac while the PC is away; setup shows progress\n- Computers: just a Scan Code button up front\n- Computers: scan the PC's code and it's added, nothing to fill in\n- Computers: set up a PC with one line and a scan\n- CI: tell a missing SideStore source from an existing one\n- CI: a fork's builds publish themselves for SideStore\n- Save to your computer: the Mac mounts computers' shared folders\n- Mouse: the Mac's pointer follows iOS's own pointer when iOS shows one",
+          "downloadURL": "https://github.com/skyfish-dev/Henge/releases/download/dev-108/Henge.ipa",
+          "size": 9192424,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "0.2.107",
           "buildVersion": "107",
           "date": "2026-11-10T05:41:12Z",
