@@ -27,6 +27,15 @@
       ],
       "versions": [
         {
+          "version": "0.2.110",
+          "buildVersion": "110",
+          "date": "2026-11-10T15:16:19Z",
+          "localizedDescription": "Built from pointer-follow at af198c8.\n\n## Changes\n- Computers: say up front what away from home takes\n- PC setup: say to keep the window open, and how many files there are\n- Computers: saves wait on the Mac while the PC is away; setup shows progress\n- Computers: just a Scan Code button up front\n- Computers: scan the PC's code and it's added, nothing to fill in\n- Computers: set up a PC with one line and a scan\n- CI: tell a missing SideStore source from an existing one\n- CI: a fork's builds publish themselves for SideStore",
+          "downloadURL": "https://github.com/skyfish-dev/Henge/releases/download/dev-110/Henge.ipa",
+          "size": 9199749,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "0.2.109",
           "buildVersion": "109",
           "date": "2026-11-10T14:36:32Z",
