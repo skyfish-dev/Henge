@@ -159,7 +159,11 @@ final class HardwareMouse {
     private var buttonsLogged = 0
     private var restX: Float = 0, restY: Float = 0
     private var speed: Float = 1
-    private var reverse = false
+    private var reverse: Bool { UserDefaults.standard.bool(forKey: Self.reverseKey) }
+    /// GameController reports this mouse's wheel, so iOS's own scroll events for it are left alone.
+    private var wheelSeen = false
+    private var pointRestX: Float = 0, pointRestY: Float = 0
+    private var pointScrollsLogged = 0
     private var scrollsLogged = 0 // the first few, to see what a device's raw values look like
     private var lastScrollFirst: Float = 0, lastScrollSecond: Float = 0
     /// GameController reports this mouse's buttons. On iPhone, AssistiveTouch may give only touches.
@@ -168,7 +172,9 @@ final class HardwareMouse {
     func start() {
         let defaults = UserDefaults.standard
         speed = defaults.object(forKey: Self.speedKey) == nil ? 1 : Float(defaults.double(forKey: Self.speedKey))
-        reverse = defaults.bool(forKey: Self.reverseKey)
+        wheelSeen = false
+        pointRestX = 0
+        pointRestY = 0
         releaseButtons()
         buttonsSeen = false
         let swapButtons = defaults.bool(forKey: PhysicalMouseButtons.swapKey)
@@ -263,6 +269,7 @@ final class HardwareMouse {
         // GameController reports both axis states when either one changes. On a
         // Magic Keyboard it calls us twice per movement, with one stale axis in
         // each call; sending both values doubles the scroll and adds sideways drift.
+        if first != 0 || second != 0 { wheelSeen = true }
         let verticalChanged = first != lastScrollFirst
         let horizontalChanged = second != lastScrollSecond
         lastScrollFirst = first
@@ -283,6 +290,32 @@ final class HardwareMouse {
             HengeLog.log("input", "scroll raw: \(first), \(second); units: \(horizontal), \(vertical)")
         }
         if horizontal != 0 || vertical != 0 { henge_vm_mouse_scroll(horizontal, vertical) }
+    }
+
+    private var scrollScale: Float {
+        let defaults = UserDefaults.standard
+        let configured = defaults.object(forKey: Self.scrollSpeedKey) == nil ? 0.3 : defaults.double(forKey: Self.scrollSpeedKey)
+        return Float(configured.isFinite ? min(max(configured, 0.1), 1.5) : 0.3)
+    }
+
+    /// A scroll as iOS gives it to a view: a wheel, or two fingers on a trackpad, in points that the
+    /// content would move by. On iPhone a mouse goes through AssistiveTouch and GameController may not
+    /// report its wheel; this is the way its scrolling reaches the Mac.
+    func scrolled(points dx: CGFloat, _ dy: CGFloat) {
+        guard !wheelSeen else { return }
+        let scale = scrollScale / 3
+        pointRestX -= Float(dx) * scale // content moving right is a scroll to the left
+        pointRestY += Float(dy) * scale // content moving down is the wheel turned up
+        let x = min(max(pointRestX.rounded(), -32), 32), y = min(max(pointRestY.rounded(), -32), 32)
+        if pointScrollsLogged < 24 {
+            pointScrollsLogged += 1
+            HengeLog.log("input", "scroll from iOS: \(dx), \(dy) points; units: \(Int(x)), \(Int(y))")
+        }
+        guard x != 0 || y != 0 else { return }
+        pointRestX = abs(pointRestX - x) > 64 ? 0 : pointRestX - x // a burst too big to send isn't owed later
+        pointRestY = abs(pointRestY - y) > 64 ? 0 : pointRestY - y
+        let way: Int32 = reverse ? -1 : 1
+        henge_vm_mouse_scroll(way * Int32(x), way * Int32(y))
     }
 
     private static func wheelUnits(_ value: Float, scale: Float) -> Int32 {

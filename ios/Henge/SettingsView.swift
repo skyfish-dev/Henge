@@ -79,6 +79,15 @@ struct SettingsView: View {
                     }
                     Text("When iOS shows its own pointer (always on iPhone, where a Bluetooth mouse goes through AssistiveTouch), the Mac's pointer goes where it is and clicks land there. Automatic does this unless iPadOS has handed the pointer to Henge; Never moves the Mac's pointer by the mouse's own motion only.")
                         .font(.footnote).foregroundStyle(.secondary)
+                    if !Device.isPad {
+                        Toggle("Reverse scrolling", isOn: $reverseScrolling)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Scroll speed")
+                            Slider(value: $scrollSpeed, in: 0.1...1.5)
+                        }
+                        Text("A mouse's wheel, or two fingers on a trackpad that works as a Bluetooth mouse, scrolls the Mac where the pointer is. Both apply immediately.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 .listRowBackground(Desk.card)
                 if Device.isPad {
@@ -95,7 +104,7 @@ struct SettingsView: View {
                         Toggle("Swap physical right and middle buttons", isOn: $swapMouseButtons)
                         Text("Only enable this if your physical mouse's right and middle buttons are reversed in the Mac. Touch controls stay unchanged. Restart the Mac session to apply.")
                             .font(.footnote).foregroundStyle(.secondary)
-                        Text("A Magic Keyboard or a Bluetooth mouse moves the Mac's pointer. Pointer speed changes apply the next time a Mac starts; scroll speed changes apply immediately.")
+                        Text("A Magic Keyboard or a Bluetooth mouse moves the Mac's pointer. Pointer speed changes apply the next time a Mac starts; scrolling changes apply immediately.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .listRowBackground(Desk.card)

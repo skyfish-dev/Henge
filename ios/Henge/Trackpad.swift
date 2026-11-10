@@ -65,6 +65,19 @@ struct Trackpad: UIViewRepresentable {
             backgroundColor = .clear
             addInteraction(UIPointerInteraction(delegate: self))
             addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
+            // A mouse's wheel, or two fingers on a trackpad, as iOS gives them to a view: no touches.
+            let scroll = UIPanGestureRecognizer(target: self, action: #selector(scrolled(_:)))
+            scroll.allowedScrollTypesMask = .all
+            scroll.allowedTouchTypes = []
+            scroll.cancelsTouchesInView = false
+            addGestureRecognizer(scroll)
+        }
+
+        @objc private func scrolled(_ pan: UIPanGestureRecognizer) {
+            let moved = pan.translation(in: self)
+            pan.setTranslation(.zero, in: self)
+            guard pan.state == .began || pan.state == .changed else { return }
+            HardwareMouse.shared.scrolled(points: moved.x, moved.y)
         }
 
         /// Over the Mac there is only the Mac's pointer, if iPadOS hasn't locked its own away.
