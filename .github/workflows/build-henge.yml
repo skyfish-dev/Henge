@@ -157,10 +157,13 @@ jobs:
           if ! gh api "repos/$GITHUB_REPOSITORY/branches/sidestore" > /dev/null 2>&1; then
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref=refs/heads/sidestore -f sha="$GITHUB_SHA" > /dev/null
           fi
-          OLD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/contents/source.json?ref=sidestore" --jq .sha 2>/dev/null || true)
+          # The source so far, if there is one yet (its blob sha, to replace it).
+          OLD_SHA=""
           PREVIOUS=""
-          if [ -n "$OLD_SHA" ]; then
-            gh api "repos/$GITHUB_REPOSITORY/contents/source.json?ref=sidestore" --jq .content | base64 --decode > previous.json
+          if SHA=$(gh api "repos/$GITHUB_REPOSITORY/contents/source.json?ref=sidestore" --jq .sha 2>/dev/null) \
+             && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            OLD_SHA="$SHA"
+            gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/source.json?ref=sidestore" > previous.json
             PREVIOUS=previous.json
           fi
           python3 -I .github/scripts/dev_source.py repo.json "$PREVIOUS" source.json "$VERSION" "$HENGE_BUILD" "$IPA" "$URL" "$(cat notes.md)"
