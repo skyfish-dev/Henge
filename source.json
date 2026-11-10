@@ -27,6 +27,15 @@
       ],
       "versions": [
         {
+          "version": "0.2.112",
+          "buildVersion": "112",
+          "date": "2026-11-10T16:14:27Z",
+          "localizedDescription": "Built from pointer-follow at 41e36d5.\n\n## Changes\n- Mouse: big moves no longer wrap and pin the pointer at an edge\n- PC setup: a Tailscale that isn't signed in no longer stops the script\n- Computers: leave Tailscale out unless asked for\n- Computers: say up front what away from home takes\n- PC setup: say to keep the window open, and how many files there are\n- Computers: saves wait on the Mac while the PC is away; setup shows progress\n- Computers: just a Scan Code button up front\n- Computers: scan the PC's code and it's added, nothing to fill in",
+          "downloadURL": "https://github.com/skyfish-dev/Henge/releases/download/dev-112/Henge.ipa",
+          "size": 9191164,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "0.2.111",
           "buildVersion": "111",
           "date": "2026-11-10T15:27:10Z",
