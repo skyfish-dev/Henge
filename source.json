@@ -1,0 +1,53 @@
+{
+  "name": "Henge (skyfish-dev's builds)",
+  "identifier": "dev.itslevii.henge.skyfish-dev",
+  "subtitle": "Builds from this fork, before they're released.",
+  "description": "Henge built from github.com/skyfish-dev/Henge by GitHub Actions. Each build shows here as an update.",
+  "iconURL": "https://raw.githubusercontent.com/Leviidev/Henge/main/docs/icon.png",
+  "website": "https://github.com/skyfish-dev/Henge",
+  "tintColor": "#2E6BFF",
+  "featuredApps": [
+    "com.henge.app"
+  ],
+  "apps": [
+    {
+      "name": "Henge",
+      "bundleIdentifier": "com.henge.app",
+      "developerName": "Leviidev (skyfish-dev's build)",
+      "subtitle": "macOS on your iPhone and iPad.",
+      "localizedDescription": "Henge runs macOS on iPhone and iPad with its own emulator. It downloads Apple's restore image and installs macOS right on the device, no Mac needed. Safari and Discord run, and the clipboard and a shared folder work between macOS and the device. It's emulation, so it runs slower than a real Mac. Henge needs JIT (StikDebug, its built-in StikJIT on iOS 26 or later, TrollStore or a jailbreak), iOS 17 or later, an A14 or M1 chip or newer, and about 43 GB free.",
+      "iconURL": "https://raw.githubusercontent.com/Leviidev/Henge/main/docs/icon.png",
+      "tintColor": "#2E6BFF",
+      "category": "utilities",
+      "screenshots": [
+        "https://raw.githubusercontent.com/Leviidev/Henge/main/Screenshots/macs.png",
+        "https://raw.githubusercontent.com/Leviidev/Henge/main/Screenshots/trackpad.png",
+        "https://raw.githubusercontent.com/Leviidev/Henge/main/Screenshots/install.png",
+        "https://raw.githubusercontent.com/Leviidev/Henge/main/Screenshots/ipad.jpg"
+      ],
+      "versions": [
+        {
+          "version": "0.2.104",
+          "buildVersion": "104",
+          "date": "2026-11-10T04:56:13Z",
+          "localizedDescription": "Built from pointer-follow at 759efcc.\n\n## Changes\n- CI: tell a missing SideStore source from an existing one\n- CI: a fork's builds publish themselves for SideStore\n- Save to your computer: the Mac mounts computers' shared folders\n- Mouse: the Mac's pointer follows iOS's own pointer when iOS shows one\n- Graphics for macOS 13's GPU driver: its work command 0x37 (24-byte resource entries) is replayed as 0x43, and its texture objects (type 3) are made as type 2\n- macOS 14's video surfaces (x420, 420f): its compact two-plane descriptions become a real IOSurface, so its moving wallpaper draws\n- Graphics for macOS 14's GPU driver: object lists at task offset 0x4000, 0x200-byte surface descriptions, surfaces retried until described and remade when an id is reused; a pass or linear texture Metal would abort on is skipped\n- Install tab offers macOS Monterey 12.6, Ventura 13.6 and Sonoma 14.6.1; the space check uses each version's own size",
+          "downloadURL": "https://github.com/skyfish-dev/Henge/releases/download/dev-104/Henge.ipa",
+          "size": 9131703,
+          "minOSVersion": "17.0"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [
+          "get-task-allow",
+          "dynamic-codesigning",
+          "com.apple.developer.kernel.increased-memory-limit",
+          "com.apple.developer.kernel.extended-virtual-addressing"
+        ],
+        "privacy": {
+          "NSLocalNetworkUsageDescription": "Henge uses the local network to pair with this iPhone for JIT, without a computer."
+        }
+      }
+    }
+  ],
+  "news": []
+}
