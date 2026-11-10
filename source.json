@@ -27,6 +27,15 @@
       ],
       "versions": [
         {
+          "version": "0.2.107",
+          "buildVersion": "107",
+          "date": "2026-11-10T05:41:12Z",
+          "localizedDescription": "Built from pointer-follow at 6c02b4d.\n\n## Changes\n- Computers: just a Scan Code button up front\n- Computers: scan the PC's code and it's added, nothing to fill in\n- Computers: set up a PC with one line and a scan\n- CI: tell a missing SideStore source from an existing one\n- CI: a fork's builds publish themselves for SideStore\n- Save to your computer: the Mac mounts computers' shared folders\n- Mouse: the Mac's pointer follows iOS's own pointer when iOS shows one\n- Graphics for macOS 13's GPU driver: its work command 0x37 (24-byte resource entries) is replayed as 0x43, and its texture objects (type 3) are made as type 2",
+          "downloadURL": "https://github.com/skyfish-dev/Henge/releases/download/dev-107/Henge.ipa",
+          "size": 9188179,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "0.2.106",
           "buildVersion": "106",
           "date": "2026-11-10T05:27:46Z",
