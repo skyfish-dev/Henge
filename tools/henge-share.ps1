@@ -146,7 +146,12 @@ Say "      from this network and Tailscale only"
 Step "4/5  Away from home (Tailscale)"
 $ts = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
 $TailscaleIP = ""
-function TailscaleIP { if (Test-Path $ts) { (& $ts ip -4 2>$null | Select-Object -First 1) } }
+# Not signed in, `tailscale ip` complains on stderr: with ErrorActionPreference Stop, PowerShell 5 would stop the script.
+function TailscaleIP {
+    if (-not (Test-Path $ts)) { return }
+    $ErrorActionPreference = "Continue"
+    & $ts ip -4 2>$null | Where-Object { "$_" -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1
+}
 
 if (-not $NoTailscale -and -not (Test-Path $ts)) {
     Say "      Installing Tailscale (free)..."
