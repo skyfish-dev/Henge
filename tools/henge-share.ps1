@@ -238,8 +238,12 @@ small{color:#6a6f7e}
 <ol>
 <li>Point the iPhone's <b>Camera</b> at the code and tap <b>Open in Henge</b>.<br><small>Or in Henge: Settings, Computers, Scan Code.</small></li>
 <li>That's it. On the virtual Mac, this PC is in <b>Henge Drives</b> in your home folder, and in every Save dialog.</li>
-<li><small>Away from home: install Tailscale on the iPhone and sign in with the same account as this PC.</small></li>
 </ol>
+<div style="text-align:left;background:#1a1c24;border-radius:12px;padding:14px 18px;margin:16px 0;color:#c9ccd6;line-height:1.6">
+<b>On the same Wi-Fi as this PC:</b> nothing else to do.<br>
+<b>Away from home:</b> install <b>Tailscale</b> on the iPhone (App Store) and sign in with the <b>same account</b> you used on this PC. The virtual Mac doesn't need it.<br>
+<small>iOS runs one VPN at a time: start the Mac with LocalDevVPN connected (for JIT), then switch to Tailscale.</small>
+</div>
 <p><small>The code holds the password for the Henge sign-in on this PC. Close this page when you're done.</small></p>
 </main><script>
 var q = qrcode(0, 'M'); q.addData('$linkJs'); q.make();
@@ -254,5 +258,14 @@ Say "  If the page doesn't open: $page"
 Say ""
 Say "  Shared folder: $Folder"
 Say "  Addresses:     $($hosts -join ', ')"
+Say ""
+Say "  Same Wi-Fi as this PC: nothing else to do." White
+if ($TailscaleIP) {
+    Say "  Away from home: install Tailscale on the iPhone and sign in with the SAME account as this PC." White
+    Say "  iOS runs one VPN at a time: start the Mac with LocalDevVPN, then switch to Tailscale."
+} else {
+    Say "  Away from home: not set up (Tailscale was skipped). Run this again to add it." Yellow
+}
+Say ""
 Say "  To undo all of it later: run this again with -Remove"
 Say ""
