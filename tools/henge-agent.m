@@ -225,6 +225,142 @@ static void updateSelf(void) {
     exit(0);
 }
 
+// MARK: Saving while the computer is away
+//
+// While a computer can't be reached, its folder in ~/Henge Drives is an ordinary folder on the Mac: what's saved there
+// stays on the Mac. Before the computer's folder is mounted over it again, that moves to an outbox
+// (~/Library/Application Support/Henge/Outbox/<name>), and from there goes to the computer. A file the computer already
+// has with different contents is never overwritten without asking.
+
+static NSString *outboxFolder(NSString *name) {
+    return [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Henge/Outbox"]
+        stringByAppendingPathComponent:name];
+}
+
+static BOOL junk(NSString *file) { return [file isEqualToString:@".DS_Store"] || [file isEqualToString:@".localized"]; }
+
+// What was saved in the not-mounted folder, into the outbox (merged with what's waiting there already).
+static void stashOffline(NSString *point, NSString *name) {
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSString *outbox = outboxFolder(name);
+    for (NSString *item in [files contentsOfDirectoryAtPath:point error:NULL] ?: @[]) {
+        NSString *from = [point stringByAppendingPathComponent:item];
+        if (junk(item)) { [files removeItemAtPath:from error:NULL]; continue; }
+        [files createDirectoryAtPath:outbox withIntermediateDirectories:YES attributes:nil error:NULL];
+        NSString *to = [outbox stringByAppendingPathComponent:item];
+        if (runTool(@"/usr/bin/ditto", @[ from, to ], NULL) == 0) [files removeItemAtPath:from error:NULL];
+    }
+}
+
+// Asks on the Mac's screen; the button's title, or nil if nobody answered (it gives up after 10 minutes).
+static NSString *ask(NSString *message, NSArray<NSString *> *buttons) {
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/osascript"];
+    NSMutableArray *args = [@[ @"-e", @"on run argv",
+        @"-e", @"set r to display dialog (item 1 of argv) with title \"Henge\" buttons (items 2 thru -1 of argv) "
+               @"default button (count of argv) - 1 with icon caution giving up after 600",
+        @"-e", @"return button returned of r", @"-e", @"end run", message ] mutableCopy];
+    [args addObjectsFromArray:buttons];
+    task.arguments = args;
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    task.standardError = NSFileHandle.fileHandleWithNullDevice;
+    if (![task launchAndReturnError:NULL]) return nil;
+    NSData *out = [pipe.fileHandleForReading readDataToEndOfFile];
+    [task waitUntilExit];
+    NSString *answer = [[[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return answer.length ? answer : nil;
+}
+
+// "Report (from Mac).pdf", or "Report (from Mac 2).pdf" if that's taken too.
+static NSString *besides(NSString *path) {
+    NSString *folder = path.stringByDeletingLastPathComponent, *file = path.lastPathComponent;
+    NSString *stem = file.stringByDeletingPathExtension, *ext = file.pathExtension;
+    for (int n = 1;; n++) {
+        NSString *tag = n == 1 ? @"from Mac" : [NSString stringWithFormat:@"from Mac %d", n];
+        NSString *name = [NSString stringWithFormat:@"%@ (%@)", stem, tag];
+        if (ext.length) name = [name stringByAppendingPathExtension:ext];
+        NSString *candidate = [folder stringByAppendingPathComponent:name];
+        if (![NSFileManager.defaultManager fileExistsAtPath:candidate]) return candidate;
+    }
+}
+
+// Copies to a temporary name first, then renames over: an interrupted copy never leaves half a file in its place.
+static BOOL put(NSString *from, NSString *to) {
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSString *part = [to stringByAppendingString:@".henge-part"];
+    [files removeItemAtPath:part error:NULL];
+    if (![files copyItemAtPath:from toPath:part error:NULL]) return NO;
+    if (rename(part.fileSystemRepresentation, to.fileSystemRepresentation) != 0) {
+        [files removeItemAtPath:part error:NULL];
+        return NO;
+    }
+    return YES;
+}
+
+// Sends what's waiting in the outbox to the mounted computer. Returns how many files still wait (a copy failed).
+static NSUInteger sendOutbox(NSString *point, NSString *name) {
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSString *outbox = outboxFolder(name);
+    BOOL isDir = NO;
+    if (![files fileExistsAtPath:outbox isDirectory:&isDir] || !isDir) return 0;
+
+    NSMutableArray<NSString *> *fresh = [NSMutableArray array], *clashing = [NSMutableArray array];
+    NSDirectoryEnumerator *walk = [files enumeratorAtPath:outbox];
+    for (NSString *rel in walk) {
+        NSString *from = [outbox stringByAppendingPathComponent:rel];
+        if (![files fileExistsAtPath:from isDirectory:&isDir] || isDir) continue;
+        if (junk(rel.lastPathComponent)) { [files removeItemAtPath:from error:NULL]; continue; }
+        NSString *to = [point stringByAppendingPathComponent:rel];
+        if (![files fileExistsAtPath:to]) [fresh addObject:rel];
+        else if ([files contentsEqualAtPath:from andPath:to]) [files removeItemAtPath:from error:NULL];
+        else [clashing addObject:rel];
+    }
+
+    NSUInteger left = 0;
+    for (NSString *rel in fresh) {
+        NSString *from = [outbox stringByAppendingPathComponent:rel], *to = [point stringByAppendingPathComponent:rel];
+        [files createDirectoryAtPath:to.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:NULL];
+        if (put(from, to)) [files removeItemAtPath:from error:NULL]; else left++;
+    }
+
+    // Files the computer has too, with other contents: one question for all of them, never a silent overwrite.
+    if (clashing.count) {
+        NSString *message;
+        if (clashing.count == 1) {
+            message = [NSString stringWithFormat:@"“%@” was saved on this Mac while %@ was away, and %@ already has a "
+                       @"different file with that name.\n\nKeep both: the Mac's copy is added as “%@”.",
+                       clashing[0], name, name, besides([point stringByAppendingPathComponent:clashing[0]]).lastPathComponent];
+        } else {
+            NSArray *some = [clashing subarrayWithRange:NSMakeRange(0, MIN(clashing.count, 5))];
+            message = [NSString stringWithFormat:@"%lu files saved on this Mac while %@ was away already exist there "
+                       @"with different contents:\n\n%@%@\n\nKeep both: the Mac's copies are added with “(from Mac)” in "
+                       @"their names.", (unsigned long)clashing.count, name, [some componentsJoinedByString:@"\n"],
+                       clashing.count > some.count ? @"\n…" : @""];
+        }
+        NSString *keepPC = @"Keep the Computer's";
+        NSString *replace = clashing.count == 1 ? @"Replace It" : @"Replace Them";
+        NSString *answer = ask(message, @[ keepPC, replace, @"Keep Both" ]);
+        for (NSString *rel in clashing) {
+            NSString *from = [outbox stringByAppendingPathComponent:rel], *to = [point stringByAppendingPathComponent:rel];
+            if ([answer isEqualToString:keepPC]) {
+                // The Mac's copy goes to the Mac's Trash, not away for good.
+                [files trashItemAtURL:[NSURL fileURLWithPath:from] resultingItemURL:NULL error:NULL];
+            } else if ([answer isEqualToString:replace]) {
+                if (put(from, to)) [files removeItemAtPath:from error:NULL]; else left++;
+            } else {
+                // Keep Both, and nobody answering: nothing is lost either way.
+                if (put(from, besides(to))) [files removeItemAtPath:from error:NULL]; else left++;
+            }
+        }
+    }
+    // Folders the files came in, now empty.
+    runTool(@"/usr/bin/find", @[ outbox, @"-mindepth", @"1", @"-type", @"d", @"-empty", @"-delete" ], NULL);
+    rmdir(outbox.fileSystemRepresentation);
+    return left;
+}
+
 // The app's list (host/share.c, /.henge/drives): name TAB host TAB share TAB user TAB password, a line each.
 // Each is kept mounted on ~/Henge Drives/<name>; one taken off the list is unmounted. How it went goes back.
 static void keepDrivesMounted(void) {
@@ -244,27 +380,46 @@ static void keepDrivesMounted(void) {
         [wanted addObject:name];
         NSString *point = [folder stringByAppendingPathComponent:name];
         [files createDirectoryAtPath:point withIntermediateDirectories:YES attributes:nil error:NULL];
-        if (isMounted(point)) {
-            [report appendFormat:@"%@\tok\n", name];
-            continue;
-        }
         // Several addresses (home, then Tailscale): the first whose file sharing answers.
         NSString *host = nil;
         for (NSString *h in [f[1] componentsSeparatedByString:@","]) {
             NSString *t = [h stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
             if (t.length && answers(t)) { host = t; break; }
         }
+        if (isMounted(point)) {
+            if (host) {
+                NSUInteger left = sendOutbox(point, name);
+                if (left) [report appendFormat:@"%@\twaiting:%lu\n", name, (unsigned long)left];
+                else [report appendFormat:@"%@\tok\n", name];
+                continue;
+            }
+            // Gone (left home, asleep): let go of it, so the folder is the Mac's own again and saves keep working.
+            runTool(@"/sbin/umount", @[ @"-f", point ], NULL);
+            if (isMounted(point)) continue;
+        }
         if (!host) {
-            [report appendFormat:@"%@\t%@\n", name, @"The computer didn't answer. Is it on and awake, and on this network or Tailscale?"];
+            // "away": the app says saves wait on the Mac (an older app shows the word as it is).
+            [report appendFormat:@"%@\taway\n", name];
             continue;
         }
+        // Saved while it was away: out of the way of the mount, then sent.
+        stashOffline(point, name);
         NSString *user = f[3].length ? escaped(f[3]) : @"guest";
         NSString *share = [f[2] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet] ?: f[2];
         NSString *url = [NSString stringWithFormat:@"//%@:%@@%@/%@", user, escaped(f[4]), host, share];
         NSString *said = nil;
         int rc = runTool(@"/sbin/mount_smbfs", @[ @"-N", url, point ], &said);
-        if (rc == 0 || isMounted(point)) [report appendFormat:@"%@\tok\n", name];
-        else [report appendFormat:@"%@\t%@\n", name, [plainError(said) stringByReplacingOccurrencesOfString:@"\t" withString:@" "]];
+        if (rc == 0 || isMounted(point)) {
+            NSUInteger left = sendOutbox(point, name);
+            if (left) [report appendFormat:@"%@\twaiting:%lu\n", name, (unsigned long)left];
+            else [report appendFormat:@"%@\tok\n", name];
+        } else {
+            // Not mounted after all: what was saved goes back where it was, in view, until the next try.
+            NSString *outbox = outboxFolder(name);
+            if ([files fileExistsAtPath:outbox] && runTool(@"/usr/bin/ditto", @[ outbox, point ], NULL) == 0)
+                [files removeItemAtPath:outbox error:NULL];
+            [report appendFormat:@"%@\t%@\n", name, [plainError(said) stringByReplacingOccurrencesOfString:@"\t" withString:@" "]];
+        }
     }
     // Drives no longer on the list: let go of them, and of their empty folders.
     for (NSString *name in [files contentsOfDirectoryAtPath:folder error:NULL] ?: @[]) {

@@ -351,6 +351,9 @@ struct NetworkDrivesView: View {
         switch store.status[drive.name] {
         case nil: return ("Connecting…", Desk.dim)
         case "ok"?: return ("Connected", Desk.good)
+        case "away"?: return ("Away. Saves wait on the Mac and go over when it's back.", Desk.warn)
+        case let why? where why.hasPrefix("waiting:"):
+            return ("\(why.dropFirst("waiting:".count)) saved while away couldn't go over yet. Trying again.", Desk.warn)
         case let why?: return (why, Desk.bad)
         }
     }
@@ -716,7 +719,7 @@ struct QuickSetupSection: View {
             .padding(.vertical, 8)
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("No code on the PC yet? Paste this in its Terminal (right-click Start) and press Enter.")
+                Text("No code on the PC yet? Paste this in its Terminal (right-click Start) and press Enter. It shares the Desktop; to share another folder, go into it first (type cd, a space and the folder's path, then Enter).")
                     .font(.system(size: 14)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {

@@ -21,8 +21,17 @@ function Step($text) { Write-Host ""; Write-Host "  $text" -ForegroundColor Cyan
 # Changing sharing, accounts and the firewall needs an administrator: ask once, then carry on in that window.
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
+# Which folder: -Folder, else the one this was run in (cd there first), else the Desktop for a fresh Terminal.
+function DefaultFolder {
+    $here = (Get-Location).ProviderPath
+    $plain = @($env:USERPROFILE, $env:SystemRoot, (Join-Path $env:SystemRoot "System32"), [IO.Path]::GetPathRoot($here)) |
+        ForEach-Object { $_.TrimEnd([char]92) }
+    if ((Get-Location).Provider.Name -eq "FileSystem" -and $plain -notcontains $here.TrimEnd([char]92)) { return $here }
+    [Environment]::GetFolderPath("Desktop")
+}
+
 if (-not $admin) {
-    if (-not $Folder) { $Folder = [Environment]::GetFolderPath("Desktop") }
+    if (-not $Folder) { $Folder = DefaultFolder }
     $self = Join-Path $env:TEMP "henge-share.ps1"
     if ($PSCommandPath) { Copy-Item $PSCommandPath $self -Force }
     else { Invoke-RestMethod $ScriptUrl -OutFile $self } # run as irm ... | iex: fetch it again to run as a file
@@ -36,10 +45,12 @@ if (-not $admin) {
 
 if ($Remove) {
     Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Description -eq "Henge" } | ForEach-Object {
+        & icacls $_.Path /remove $User /C /Q | Out-Null
         Remove-SmbShare -Name $_.Name -Force
         Say "Stopped sharing $($_.Path)"
     }
     Remove-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue
+    Remove-Item -Path "HKLM:\SOFTWARE\Henge" -Recurse -ErrorAction SilentlyContinue
     if (Get-LocalUser -Name $User -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $User; Say "Removed the $User sign-in" }
     Say "Done: Henge can no longer reach this PC." Green
     return
@@ -50,7 +61,7 @@ Say ""
 Say "  Henge: save from your virtual Mac to this PC" White
 Say "  ---------------------------------------------"
 
-if (-not $Folder) { $Folder = [Environment]::GetFolderPath("Desktop") }
+if (-not $Folder) { $Folder = DefaultFolder }
 if (-not (Test-Path -LiteralPath $Folder -PathType Container)) { throw "There's no folder at $Folder" }
 $Folder = (Resolve-Path -LiteralPath $Folder).Path
 $Leaf = Split-Path $Folder -Leaf
@@ -80,7 +91,28 @@ Say "      $User (only for the shared folder, hidden from the sign-in screen)"
 
 # 2. The folder, shared read and write with that sign-in only.
 Step "2/5  Sharing $Folder"
-& icacls $Folder /grant "${User}:(OI)(CI)M" /Q | Out-Null
+# Windows checks the folder's own permissions too, so the sign-in needs them on everything in it: Windows goes through
+# every file, which takes a while in a big folder (one with code projects in it can take minutes). Once per folder:
+# finishing is noted in the registry, so a run stopped halfway does it again.
+$done = "HKLM:\SOFTWARE\Henge\Granted"
+New-Item -Path $done -Force | Out-Null
+if ((Get-ItemProperty -Path $done -ErrorAction SilentlyContinue).$Folder -eq $User) {
+    Say "      $User can already reach it"
+} else {
+    $log = Join-Path $env:TEMP "henge-icacls.txt"
+    $grant = Start-Process icacls -ArgumentList "`"$Folder`"", "/grant", "${User}:(OI)(CI)M", "/C", "/Q" -NoNewWindow -PassThru `
+        -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+    $started = Get-Date
+    $spin = "|/-\"
+    $i = 0
+    while (-not $grant.HasExited) {
+        Start-Sleep -Milliseconds 250
+        $secs = [int]((Get-Date) - $started).TotalSeconds
+        Write-Host ("`r      {0} giving Henge access to everything in it... {1}s (lots of files can take a few minutes)   " -f $spin[$i++ % 4], $secs) -NoNewline -ForegroundColor DarkGray
+    }
+    Write-Host ("`r      done in {0}s{1}" -f [int]((Get-Date) - $started).TotalSeconds, (" " * 60))
+    New-ItemProperty -Path $done -Name $Folder -Value $User -PropertyType String -Force | Out-Null
+}
 Set-Service -Name LanmanServer -StartupType Automatic
 Start-Service -Name LanmanServer
 Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $Share -or ($_.Description -eq "Henge" -and $_.Path -eq $Folder) } |
