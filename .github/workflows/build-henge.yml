@@ -17,6 +17,11 @@ name: Build Henge IPA
 on:
   workflow_dispatch: {}
 
+# On a fork, each build is also published as a pre-release, and listed in a SideStore/AltStore source on
+# the fork's `sidestore` branch (source.json): add that source once and each build shows as an update.
+permissions:
+  contents: write
+
 env:
   HUSK: ${{ github.workspace }}/Husk
   # The Makefile takes its slirp headers from IOS_DEPS, not HUSK:
@@ -37,6 +42,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: Henge
+          # A few commits back, for the release notes.
+          fetch-depth: 10
 
       # fetch_deps.sh copies prebuilt pieces out of a BUILT Husk checkout:
       # StikJIT.xcframework (vendored in Husk's repo, comes with checkout),
@@ -97,6 +104,20 @@ jobs:
         working-directory: Henge
         run: make ios-lib
 
+      # A fork's builds number themselves 0.2.<101+>, so SideStore sees each as newer than the last
+      # (and than 0.2.0). Henge's own repository keeps the version in Info.plist.
+      - name: Number this build
+        if: github.repository != 'Leviidev/Henge'
+        working-directory: Henge
+        run: |
+          set -euo pipefail
+          BUILD=$((100 + GITHUB_RUN_NUMBER))
+          for plist in ios/Henge/Info.plist ios/HengeJITHelper/Info.plist; do
+            plutil -replace CFBundleVersion -string "$BUILD" "$plist"
+            plutil -replace CFBundleShortVersionString -string "0.2.$BUILD" "$plist"
+          done
+          echo "HENGE_BUILD=$BUILD" >> "$GITHUB_ENV"
+
       - name: Package Henge.ipa
         working-directory: Henge
         run: zsh ios/scripts/package_ipa.sh
@@ -110,3 +131,45 @@ jobs:
           name: Henge-ipa-${{ github.sha }}
           path: /Users/runner/Desktop/Henge.ipa
           if-no-files-found: error
+
+      - name: Publish for SideStore
+        if: github.repository != 'Leviidev/Henge'
+        working-directory: Henge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          IPA=/Users/runner/Desktop/Henge.ipa
+          VERSION="0.2.$HENGE_BUILD"
+          TAG="dev-$HENGE_BUILD"
+          SHORT=$(git rev-parse --short HEAD)
+          {
+            echo "Built from ${GITHUB_REF_NAME} at ${SHORT}."
+            echo
+            echo "## Changes"
+            git log -8 --no-merges --pretty='- %s' HEAD
+          } > notes.md
+          gh release create "$TAG" "$IPA" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Henge $VERSION (${GITHUB_REF_NAME}, ${SHORT})" --notes-file notes.md
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Henge.ipa"
+
+          # The source lives on its own branch, so builds never commit to the code.
+          if ! gh api "repos/$GITHUB_REPOSITORY/branches/sidestore" > /dev/null 2>&1; then
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref=refs/heads/sidestore -f sha="$GITHUB_SHA" > /dev/null
+          fi
+          OLD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/contents/source.json?ref=sidestore" --jq .sha 2>/dev/null || true)
+          PREVIOUS=""
+          if [ -n "$OLD_SHA" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/contents/source.json?ref=sidestore" --jq .content | base64 --decode > previous.json
+            PREVIOUS=previous.json
+          fi
+          python3 -I .github/scripts/dev_source.py repo.json "$PREVIOUS" source.json "$VERSION" "$HENGE_BUILD" "$IPA" "$URL" "$(cat notes.md)"
+          ARGS=(-X PUT "repos/$GITHUB_REPOSITORY/contents/source.json" -f branch=sidestore
+                -f message="Source: Henge $VERSION" -f content="$(base64 < source.json | tr -d '\n')")
+          if [ -n "$OLD_SHA" ]; then ARGS+=(-f sha="$OLD_SHA"); fi
+          gh api "${ARGS[@]}" > /dev/null
+          {
+            echo "### Henge $VERSION"
+            echo "SideStore source: https://raw.githubusercontent.com/$GITHUB_REPOSITORY/sidestore/source.json"
+            echo "IPA: $URL"
+          } >> "$GITHUB_STEP_SUMMARY"
