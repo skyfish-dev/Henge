@@ -102,15 +102,28 @@ if ((Get-ItemProperty -Path $done -ErrorAction SilentlyContinue).$Folder -eq $Us
     $log = Join-Path $env:TEMP "henge-icacls.txt"
     $grant = Start-Process icacls -ArgumentList "`"$Folder`"", "/grant", "${User}:(OI)(CI)M", "/C", "/Q" -NoNewWindow -PassThru `
         -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+    # How many files there are, counted alongside. Windows doesn't say how far through it is, only when it's done.
+    $count = Start-Job -ArgumentList $Folder -ScriptBlock {
+        param($f)
+        (Get-ChildItem -LiteralPath $f -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object).Count
+    }
+    $total = $null
     $started = Get-Date
     $spin = "|/-\"
     $i = 0
+    Say "      Keep this window open until it says Done. You can use the PC meanwhile, and close Henge on the phone." Yellow
     while (-not $grant.HasExited) {
         Start-Sleep -Milliseconds 250
-        $secs = [int]((Get-Date) - $started).TotalSeconds
-        Write-Host ("`r      {0} giving Henge access to everything in it... {1}s (lots of files can take a few minutes)   " -f $spin[$i++ % 4], $secs) -NoNewline -ForegroundColor DarkGray
+        if ($null -eq $total -and $count.State -eq "Completed") { $total = Receive-Job $count }
+        $took = (Get-Date) - $started
+        $files = if ($null -ne $total) { "{0:N0} files" -f $total } else { "counting files" }
+        Write-Host ("`r      {0} giving Henge access to everything in it: {1}, {2}:{3:00} so far   " -f `
+            $spin[$i++ % 4], $files, [int][Math]::Floor($took.TotalMinutes), $took.Seconds) -NoNewline -ForegroundColor DarkGray
     }
-    Write-Host ("`r      done in {0}s{1}" -f [int]((Get-Date) - $started).TotalSeconds, (" " * 60))
+    Stop-Job $count -ErrorAction SilentlyContinue
+    Remove-Job $count -Force -ErrorAction SilentlyContinue
+    $took = (Get-Date) - $started
+    Write-Host ("`r      done in {0}:{1:00}{2}" -f [int][Math]::Floor($took.TotalMinutes), $took.Seconds, (" " * 70))
     New-ItemProperty -Path $done -Name $Folder -Value $User -PropertyType String -Force | Out-Null
 }
 Set-Service -Name LanmanServer -StartupType Automatic

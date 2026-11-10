@@ -719,7 +719,7 @@ struct QuickSetupSection: View {
             .padding(.vertical, 8)
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("No code on the PC yet? Paste this in its Terminal (right-click Start) and press Enter. It shares the Desktop; to share another folder, go into it first (type cd, a space and the folder's path, then Enter).")
+                Text("No code on the PC yet? Paste this in its Terminal (right-click Start) and press Enter. Keep that window open until it shows the code: the first time, a folder with lots of files takes a few minutes. You can close Henge meanwhile. It shares the Desktop; to share another folder, go into it first (type cd, a space and the folder's path, then Enter).")
                     .font(.system(size: 14)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
