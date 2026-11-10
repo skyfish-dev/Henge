@@ -661,6 +661,36 @@ static const char lighten_script[] =
     "echo 'Also turn on Reduce Motion and Reduce Transparency: System Settings, Accessibility.'\n"
     "echo 'Log out and back in for all of it to take effect. To undo: curl -s http://" HV_SHARE_ADDR "/.henge/unlighten | sh'\n";
 
+/* What "curl -s http://10.0.2.4/.henge/tailscale | sh" runs in macOS: Tailscale's own package, so that the
+   computers in Settings, Computers are reachable away from home at their Tailscale addresses. Its sign-in link
+   goes on the clipboard, which the helper hands to the device: Safari there signs in, as browsing in the Mac may
+   not work. Nothing reads the script's own stdin (sh is reading the script from it); sudo asks on the terminal. */
+static const char tailscale_script[] =
+    "#!/bin/sh\n"
+    "TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale\n"
+    "if [ ! -x \"$TS\" ]; then\n"
+    "  echo 'Downloading Tailscale...'\n"
+    "  V=$(curl -fsSL 'https://pkgs.tailscale.com/stable/?mode=json' </dev/null | plutil -extract MacZips.universal-package raw -o - - 2>/dev/null)\n"
+    "  [ -n \"$V\" ] || { echo 'Could not reach Tailscale. Is the Mac online?'; exit 1; }\n"
+    "  curl -fL --progress-bar \"https://pkgs.tailscale.com/stable/$V\" -o /tmp/tailscale.pkg </dev/null || exit 1\n"
+    "  echo 'Installing. Type the Mac password when asked (it does not show as you type).'\n"
+    "  sudo installer -pkg /tmp/tailscale.pkg -target / </dev/null || exit 1\n"
+    "  rm -f /tmp/tailscale.pkg\n"
+    "fi\n"
+    "open -a Tailscale\n"
+    "echo 'If macOS asks to allow Tailscale (a system extension or VPN configuration), choose Allow.'\n"
+    "sleep 5\n"
+    "\"$TS\" up </dev/null 2>&1 | while IFS= read -r line; do\n"
+    "  echo \"$line\"\n"
+    "  L=$(echo \"$line\" | grep -o 'https://login.tailscale.com/[^ ]*')\n"
+    "  if [ -n \"$L\" ]; then\n"
+    "    printf %s \"$L\" | pbcopy\n"
+    "    echo '>> The sign-in link is copied to your iPhone too: paste it in Safari there, and sign in with the same account as your PC.'\n"
+    "  fi\n"
+    "done\n"
+    "if \"$TS\" ip -4 >/dev/null 2>&1; then echo 'Tailscale is on: the Mac reaches your computers from anywhere.';\n"
+    "else echo 'Tailscale is not signed in yet. Run this again to try once more.'; fi\n";
+
 /* And back. The wallpaper stays as it is: pick one in System Settings. */
 static const char unlighten_script[] =
     "#!/bin/sh\n"
@@ -765,6 +795,10 @@ static int serve_henge(Conn *c, Request *r) {
         if (body_discard(c, r) != 0) return -1;
         const char *s = what[0] == 'l' ? lighten_script : unlighten_script;
         return respond(c, r, 200, "OK", "Content-Type: text/plain\r\n", s, strlen(s));
+    }
+    if (!strcmp(what, "tailscale") && !strcmp(r->method, "GET")) {
+        if (body_discard(c, r) != 0) return -1;
+        return respond(c, r, 200, "OK", "Content-Type: text/plain\r\n", tailscale_script, sizeof tailscale_script - 1);
     }
     if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);

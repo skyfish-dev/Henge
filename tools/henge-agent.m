@@ -3,6 +3,10 @@
 // Computers) mounted in ~/Henge Drives, so that apps on the Mac can save straight to them. It talks to host/share.c at 10.0.2.4, which only exists inside Henge.
 #import <AppKit/AppKit.h>
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <poll.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -161,6 +165,27 @@ static int runTool(NSString *path, NSArray<NSString *> *arguments, NSString **sa
     return task.terminationStatus;
 }
 
+// Whether a computer's file sharing (TCP 445) takes a connection within a couple of seconds.
+static BOOL answers(NSString *host) {
+    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM }, *found = NULL;
+    if (getaddrinfo(host.UTF8String, "445", &hints, &found) != 0 || !found) return NO;
+    BOOL ok = NO;
+    int s = socket(found->ai_family, SOCK_STREAM, 0);
+    if (s >= 0) {
+        fcntl(s, F_SETFL, fcntl(s, F_GETFL) | O_NONBLOCK);
+        if (connect(s, found->ai_addr, found->ai_addrlen) == 0) ok = YES;
+        else if (errno == EINPROGRESS) {
+            struct pollfd p = { .fd = s, .events = POLLOUT };
+            int err = 0;
+            socklen_t len = sizeof err;
+            ok = poll(&p, 1, 2500) == 1 && getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == 0;
+        }
+        close(s);
+    }
+    freeaddrinfo(found);
+    return ok;
+}
+
 // mount_smbfs says what went wrong in its own words; these are the ones people meet.
 static NSString *plainError(NSString *said) {
     NSString *s = said.lowercaseString;
@@ -194,9 +219,19 @@ static void keepDrivesMounted(void) {
             [report appendFormat:@"%@\tok\n", name];
             continue;
         }
+        // Several addresses (home, then Tailscale): the first whose file sharing answers.
+        NSString *host = nil;
+        for (NSString *h in [f[1] componentsSeparatedByString:@","]) {
+            NSString *t = [h stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+            if (t.length && answers(t)) { host = t; break; }
+        }
+        if (!host) {
+            [report appendFormat:@"%@\t%@\n", name, @"The computer didn't answer. Is it on and awake, and on this network or Tailscale?"];
+            continue;
+        }
         NSString *user = f[3].length ? escaped(f[3]) : @"guest";
         NSString *share = [f[2] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet] ?: f[2];
-        NSString *url = [NSString stringWithFormat:@"//%@:%@@%@/%@", user, escaped(f[4]), f[1], share];
+        NSString *url = [NSString stringWithFormat:@"//%@:%@@%@/%@", user, escaped(f[4]), host, share];
         NSString *said = nil;
         int rc = runTool(@"/sbin/mount_smbfs", @[ @"-N", url, point ], &said);
         if (rc == 0 || isMounted(point)) [report appendFormat:@"%@\tok\n", name];

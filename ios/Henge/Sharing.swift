@@ -10,6 +10,8 @@ enum Sharing {
 
     static let setUpCommand = "curl -s http://10.0.2.4/.henge/install | sh"
     /// Less background work and drawing in macOS (host/share.c, lighten_script), and back.
+    /// Tailscale in macOS, for computers away from home (host/share.c, tailscale_script).
+    static let tailscaleCommand = "curl -s http://10.0.2.4/.henge/tailscale | sh"
     static let lightenCommand = "curl -s http://10.0.2.4/.henge/lighten | sh"
     static let unlightenCommand = "curl -s http://10.0.2.4/.henge/unlighten | sh"
 

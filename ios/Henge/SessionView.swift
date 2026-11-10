@@ -514,11 +514,11 @@ struct SessionView: View {
                 Section("Sharing") {
                     LabeledContent("Clipboard and folder", value: helperRunning ? "On" : "Not set up")
                     NavigationLink {
-                        NetworkDrivesView(running: true, typeSetUp: {
+                        NetworkDrivesView(running: true, type: { command in
                             showDetails = false
                             Task {
                                 try? await Task.sleep(nanoseconds: 600_000_000)
-                                await Sharing.typeSetUpCommand()
+                                await Keys.typeSlowly(command)
                             }
                         })
                     } label: {

@@ -1,6 +1,7 @@
 import SwiftUI
 import Network
 import Security
+import VisionKit
 
 /// Computers on the network whose shared folders the Mac saves to: a PC's Desktop, another Mac's
 /// Documents, a NAS. The app keeps the list (passwords in the Keychain) and hands it to the helper in
@@ -10,7 +11,7 @@ import Security
 struct NetworkDrive: Codable, Identifiable, Hashable {
     var id = UUID()
     var name: String       // what the Mac calls it: the folder in ~/Henge Drives
-    var host: String       // an IP address or a name
+    var host: String       // an IP address or a name; or several, comma separated, tried in turn (home, then Tailscale)
     var share: String      // the shared folder's name on that computer
     var user: String       // empty for a guest
 }
@@ -24,6 +25,11 @@ final class NetworkDrives: ObservableObject {
     /// What the helper last said about each, by name: nil "ok", or why it couldn't connect.
     @Published private(set) var status: [String: String] = [:]
     @Published private(set) var heardFromMac = false
+    /// A computer from a henge://computer link (the code tools/henge-share.ps1 shows), waiting to be added.
+    @Published var offer: ComputerOffer?
+
+    /// The one line that sets up a Windows PC (tools/henge-share.ps1).
+    static let pcCommand = "irm https://raw.githubusercontent.com/skyfish-dev/Henge/pointer-follow/tools/henge-share.ps1 | iex"
 
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.listKey),
@@ -73,6 +79,22 @@ final class NetworkDrives: ObservableObject {
             [d.name, d.host, d.share, d.user, Self.password(for: d.id) ?? ""].map(Self.clean).joined(separator: "\t")
         }
         henge_share_set_drives(lines.joined(separator: "\n") + "\n")
+    }
+
+    /// henge://computer?n=name&h=host,host&s=share&u=user&p=password: offers the computer. False for other links.
+    @discardableResult
+    func open(_ url: URL) -> Bool {
+        guard let offer = ComputerOffer(url) else { return false }
+        self.offer = offer
+        return true
+    }
+
+    /// The drive already saved for the same folder on the same computer, if any: a code scanned again updates it.
+    func existing(_ offer: ComputerOffer) -> NetworkDrive? {
+        drives.first { d in
+            d.share.caseInsensitiveCompare(offer.share) == .orderedSame
+                && !Set(d.host.lowercased().split(separator: ",")).isDisjoint(with: offer.host.lowercased().split(separator: ","))
+        }
     }
 
     /// Before a Mac starts: nothing heard from its helper yet, and the list ready for it.
@@ -143,9 +165,21 @@ final class NetworkDrives: ObservableObject {
     // MARK: Checking
 
     /// Whether this device reaches the computer's file sharing (SMB, port 445). The Mac reaches what this device does.
-    static func check(_ host: String) async -> Result<Void, CheckError> {
-        let host = hostOnly(host)
-        guard !host.isEmpty, let port = NWEndpoint.Port(rawValue: 445) else { return .failure(.noAddress) }
+    static func check(_ hosts: String) async -> Result<Void, CheckError> {
+        let all = hostOnly(hosts).split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !all.isEmpty else { return .failure(.noAddress) }
+        var last = CheckError.noAddress
+        for host in all {
+            switch await check(one: host) {
+            case .success: return .success(())
+            case .failure(let e): last = e
+            }
+        }
+        return .failure(last)
+    }
+
+    private static func check(one host: String) async -> Result<Void, CheckError> {
+        guard let port = NWEndpoint.Port(rawValue: 445) else { return .failure(.noAddress) }
         return await withCheckedContinuation { done in
             let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
             let once = Once()
@@ -202,9 +236,11 @@ struct NetworkDrivesView: View {
     @ObservedObject private var store = NetworkDrives.shared
     @State private var editing: NetworkDrive?
     @State private var adding = false
+    @State private var scanning = false
+    @State private var scanned: ComputerOffer?
     var running = false
-    /// In a running Mac's Details: types the Set Up Command into the Mac's Terminal.
-    var typeSetUp: (() -> Void)? = nil
+    /// In a running Mac's Details: types a command into the Mac's Terminal.
+    var type: ((String) -> Void)? = nil
 
     var body: some View {
         Form {
@@ -223,17 +259,33 @@ struct NetworkDrivesView: View {
                         .foregroundStyle(Desk.text)
                 }
                 .onDelete { offsets in offsets.map { store.drives[$0] }.forEach(store.remove) }
+                if DataScannerViewController.isSupported {
+                    Button { scanning = true } label: { Label("Scan Code", systemImage: "qrcode.viewfinder") }
+                }
                 Button { adding = true } label: { Label("Add Computer", systemImage: "plus.circle.fill") }
             } footer: {
                 Text("On the Mac, each one is in Finder under Henge Drives in your home folder, and in every app's Save dialog. Drag Henge Drives to Finder's sidebar to keep it one click away.")
             }
             .listRowBackground(Desk.card)
 
-            if running, !store.drives.isEmpty, oldHelper, let typeSetUp {
+            if running, !store.drives.isEmpty, oldHelper, let type {
                 Section {
-                    Button { typeSetUp() } label: { Label("Update Henge's Helper", systemImage: "arrow.down.circle") }
+                    Button { type(Sharing.setUpCommand) } label: { Label("Update Henge's Helper", systemImage: "arrow.down.circle") }
                 } footer: {
                     Text("The helper on this Mac is from before Henge could connect computers. Open Terminal on the Mac, tap this, then press Return.")
+                }
+                .listRowBackground(Desk.card)
+            }
+            QuickSetupSection()
+            if running, let type {
+                Section {
+                    Button { type(Sharing.tailscaleCommand) } label: {
+                        Label("Type the Tailscale Command", systemImage: "globe")
+                    }
+                } header: {
+                    Text("Away From Home (Experimental)")
+                } footer: {
+                    Text("Puts Tailscale on this Mac, so it reaches your computers at their Tailscale addresses from any Wi-Fi or cellular network. Open Terminal on the Mac, tap this, then press Return and type the Mac's password. The sign-in link lands on this \(Device.name)'s clipboard: paste it in Safari and sign in with the same account as your PC.")
                 }
                 .listRowBackground(Desk.card)
             }
@@ -250,6 +302,14 @@ struct NetworkDrivesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { EditButton() }
         .sheet(isPresented: $adding) { NetworkDriveEditor(drive: nil) }
+        .sheet(isPresented: $scanning) {
+            CodeScanner { url in
+                scanning = false
+                // Here rather than through the app's own sheet: this list can itself be in a sheet (a Mac's Details).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { scanned = ComputerOffer(url) }
+            }
+        }
+        .sheet(item: $scanned) { NetworkDriveEditor(offer: $0) }
         .sheet(item: $editing) { NetworkDriveEditor(drive: $0) }
         .task {
             guard running else { return }
@@ -303,6 +363,7 @@ struct NetworkDrivesView: View {
 /// Adding a computer, or changing one.
 struct NetworkDriveEditor: View {
     let original: NetworkDrive?
+    let fromCode: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var host: String
@@ -315,7 +376,21 @@ struct NetworkDriveEditor: View {
     @State private var checkedOK = false
     @State private var confirmRemove = false
 
+    /// From a scanned code: the computer filled in, or the one already saved for that folder brought up to date.
+    init(offer: ComputerOffer) {
+        let existing = NetworkDrives.shared.existing(offer)
+        original = existing
+        fromCode = true
+        _name = State(initialValue: existing?.name ?? offer.name)
+        _host = State(initialValue: offer.host)
+        _share = State(initialValue: offer.share)
+        _user = State(initialValue: offer.user)
+        _password = State(initialValue: offer.password)
+        _guest = State(initialValue: offer.user.isEmpty)
+    }
+
     init(drive: NetworkDrive?) {
+        fromCode = false
         original = drive
         _name = State(initialValue: drive?.name ?? "")
         _host = State(initialValue: drive?.host ?? "")
@@ -333,6 +408,20 @@ struct NetworkDriveEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                if fromCode {
+                    Section {
+                        Label {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(original == nil ? "Ready to add" : "Updates \(original?.name ?? "")")
+                                    .font(.system(size: 16, weight: .semibold))
+                                Text("Everything below came from the code on your computer. Tap \(original == nil ? "Add" : "Save").")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "checkmark.seal.fill").foregroundStyle(Desk.good)
+                        }
+                    }
+                }
                 Section {
                     TextField("Address, e.g. 192.168.1.20", text: $host)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -404,7 +493,7 @@ struct NetworkDriveEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(!canSave).fontWeight(.semibold)
+                    Button(fromCode && original == nil ? "Add" : "Save") { save() }.disabled(!canSave).fontWeight(.semibold)
                 }
             }
             .confirmationDialog("Remove this computer?", isPresented: $confirmRemove, titleVisibility: .visible) {
@@ -449,6 +538,13 @@ struct NetworkDrivesGuide: View {
                 .pickerStyle(.segmented)
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets())
+            }
+            if kind == .windows {
+                Section {
+                    Text("The quickest way: Settings, Computers, Set Up a PC in One Step. One line on the PC does all of the below, then you scan a code. The steps here are for doing it by hand.")
+                        .font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+                }
+                .listRowBackground(Desk.card)
             }
             switch kind {
             case .windows: windows
@@ -526,8 +622,9 @@ struct NetworkDrivesGuide: View {
     private var awayFromHome: some View {
         steps("Away from home", [
             "File sharing must never be opened to the internet. Use Tailscale, a free private network between your own devices, instead.",
-            "Install Tailscale on the computer and sign in. Then install it in the virtual Mac too (tailscale.com/download, the macOS app) and sign in with the same account.",
-            "In Henge, use the computer's Tailscale address (100.x.y.z, shown in Tailscale) as the address. It works from any Wi-Fi or cellular network, wherever the computer is.",
+            "Install Tailscale on the computer and sign in (the one-step PC setup offers to do this).",
+            "Then put it in the virtual Mac too: Details, Computers, Type the Tailscale Command, with Terminal open on the Mac. Sign in with the same account: the link is copied to this device, so paste it in Safari.",
+            "The computer's Tailscale address (100.x.y.z) goes after its home address, separated by a comma: the one-step setup does this. The Mac tries the home address first, then Tailscale.",
         ], footer: "Tailscale belongs in the virtual Mac rather than on the iPhone: iOS runs one VPN at a time, and LocalDevVPN may need that slot for JIT.")
     }
 
@@ -551,5 +648,140 @@ struct NetworkDrivesGuide: View {
             if let footer { Text(footer) }
         }
         .listRowBackground(Desk.card)
+    }
+}
+
+// MARK: - Setting up a PC in one step
+
+/// A computer from a henge://computer link: what tools/henge-share.ps1 set up, in the code it shows.
+struct ComputerOffer: Identifiable {
+    let id = UUID()
+    var name, host, share, user, password: String
+
+    init?(_ url: URL) {
+        guard url.scheme?.lowercased() == "henge", url.host?.lowercased() == "computer",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return nil }
+        func value(_ key: String) -> String { items.first { $0.name == key }?.value ?? "" }
+        host = value("h")
+        share = value("s")
+        guard !host.isEmpty, !share.isEmpty else { return nil }
+        name = value("n").isEmpty ? share : value("n")
+        user = value("u")
+        password = value("p")
+    }
+}
+
+/// One line on the PC, one scan here.
+struct QuickSetupSection: View {
+    @State private var copied = false
+
+    var body: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                quickStep(1, "On your Windows PC, open PowerShell (right-click Start, Terminal) and run:")
+                Text(NetworkDrives.pcCommand)
+                    .font(.system(size: 13, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Desk.page, in: RoundedRectangle(cornerRadius: 8))
+                HStack(spacing: 10) {
+                    Button {
+                        UIPasteboard.general.string = NetworkDrives.pcCommand
+                        copied = true
+                    } label: {
+                        Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+                    ShareLink(item: NetworkDrives.pcCommand) { Label("Send to PC", systemImage: "square.and.arrow.up") }
+                        .buttonStyle(.bordered)
+                }
+                quickStep(2, "Choose Yes when Windows asks. It shares your Desktop, and can set up Tailscale for saving from anywhere.")
+                quickStep(3, "A code appears on the PC. Scan it with this \(Device.name)'s Camera, or with Scan Code above, and tap Add.")
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Set Up a PC in One Step")
+        } footer: {
+            Text("The PC gets a sign-in just for Henge that reaches only the shared folder, and its firewall lets in only this network and Tailscale. To undo it, run the same line with -Remove at the end.")
+        }
+        .listRowBackground(Desk.card)
+    }
+
+    private func quickStep(_ n: Int, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("\(n)")
+                .font(.system(size: 13, weight: .bold))
+                .frame(width: 22, height: 22)
+                .background(Desk.accentLight.opacity(0.25), in: Circle())
+            Text(text).font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// The camera, looking for a henge://computer code.
+struct CodeScanner: View {
+    let found: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var wrongCode = false
+
+    var body: some View {
+        NavigationStack {
+            ScannerView { text in
+                if let url = URL(string: text), ComputerOffer(url) != nil {
+                    found(url)
+                } else {
+                    wrongCode = true
+                }
+            }
+            .ignoresSafeArea()
+            .overlay(alignment: .bottom) {
+                Text(wrongCode ? "That's not a Henge code. Scan the one the PC shows." : "Point at the code on your computer's screen.")
+                    .font(.system(size: 15, weight: .medium))
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.bottom, 40)
+            }
+            .navigationTitle("Scan Code")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct ScannerView: UIViewControllerRepresentable {
+    let scanned: (String) -> Void
+
+    func makeUIViewController(context: Context) -> DataScannerViewController {
+        let scanner = DataScannerViewController(recognizedDataTypes: [.barcode(symbologies: [.qr])],
+                                                qualityLevel: .balanced, isHighlightingEnabled: true)
+        scanner.delegate = context.coordinator
+        return scanner
+    }
+
+    func updateUIViewController(_ scanner: DataScannerViewController, context: Context) {
+        context.coordinator.scanned = scanned
+        if !scanner.isScanning { try? scanner.startScanning() }
+    }
+
+    static func dismantleUIViewController(_ scanner: DataScannerViewController, coordinator: Coordinator) {
+        scanner.stopScanning()
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(scanned: scanned) }
+
+    @MainActor final class Coordinator: NSObject, DataScannerViewControllerDelegate {
+        var scanned: (String) -> Void
+        private var done = false
+        init(scanned: @escaping (String) -> Void) { self.scanned = scanned }
+
+        func dataScanner(_ scanner: DataScannerViewController, didAdd items: [RecognizedItem], allItems: [RecognizedItem]) {
+            for item in items {
+                guard !done, case .barcode(let code) = item, let text = code.payloadStringValue else { continue }
+                if text.lowercased().hasPrefix("henge://computer") { done = true }
+                scanned(text)
+            }
+        }
     }
 }

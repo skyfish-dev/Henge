@@ -30,7 +30,11 @@ struct HengeApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .onOpenURL { url in HengeLog.log("app", "opened with \(url.absoluteString)") } // henge:// back from LocalDevVPN
+                .onOpenURL { url in
+                    // henge:// back from LocalDevVPN, or henge://computer from a computer's setup code.
+                    if NetworkDrives.shared.open(url) { HengeLog.log("app", "opened with a computer's setup code"); return }
+                    HengeLog.log("app", "opened with \(url.absoluteString)")
+                }
         }
     }
 }
@@ -40,6 +44,7 @@ struct RootView: View {
 
     @ObservedObject private var machines = Machines.shared
     @ObservedObject private var jit = JITCoordinator.shared
+    @ObservedObject private var drives = NetworkDrives.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var running: VirtualMac?
     @State private var tab = Tab.macs
@@ -65,6 +70,7 @@ struct RootView: View {
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $jit.showSetup) { JITSetupFlow() }
+        .sheet(item: $drives.offer) { NetworkDriveEditor(offer: $0) }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             machines.collectImports()
