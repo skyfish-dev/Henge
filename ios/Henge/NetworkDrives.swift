@@ -251,7 +251,6 @@ final class NetworkDrives: ObservableObject {
 struct NetworkDrivesView: View {
     @ObservedObject private var store = NetworkDrives.shared
     @State private var editing: NetworkDrive?
-    @State private var adding = false
     @State private var scanning = false
     @State private var justAdded: AddedComputer?
     var running = false
@@ -268,7 +267,7 @@ struct NetworkDrivesView: View {
                     }
                     .onDelete { offsets in offsets.map { store.drives[$0] }.forEach(store.remove) }
                 } footer: {
-                    Text("On the Mac, each one is in Finder under Henge Drives in your home folder, and in every app's Save dialog. Drag Henge Drives to Finder's sidebar to keep it one click away.")
+                    Text("On the Mac: Henge Drives, in your home folder and every Save dialog.")
                 }
                 .listRowBackground(Desk.card)
             }
@@ -284,25 +283,8 @@ struct NetworkDrivesView: View {
                 }
                 .listRowBackground(Desk.card)
             }
-            if running, let type {
-                Section {
-                    Button { type(Sharing.tailscaleCommand) } label: {
-                        Label("Type the Tailscale Command", systemImage: "globe")
-                    }
-                } header: {
-                    Text("Away From Home (Experimental)")
-                } footer: {
-                    Text("Puts Tailscale on this Mac, so it reaches your computers at their Tailscale addresses from any Wi-Fi or cellular network. Open Terminal on the Mac, tap this, then press Return and type the Mac's password. The sign-in link lands on this \(Device.name)'s clipboard: paste it in Safari and sign in with the same account as your PC.")
-                }
-                .listRowBackground(Desk.card)
-            }
             Section {
-                Button { adding = true } label: { Label("Enter Details by Hand", systemImage: "keyboard") }
-                NavigationLink { NetworkDrivesGuide() } label: { Label("How to Set Up", systemImage: "book") }
-            } header: {
-                Text("A Mac, Linux or a NAS")
-            } footer: {
-                Text("For computers that aren't Windows PCs, or to set a PC up yourself. The guide covers Windows, a Mac and Linux, at home or away.")
+                NavigationLink { ComputersMoreView(type: running ? type : nil) } label: { Text("More Options") }
             }
             .listRowBackground(Desk.card)
         }
@@ -311,7 +293,6 @@ struct NetworkDrivesView: View {
         .navigationTitle("Computers")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { if !store.drives.isEmpty { EditButton() } }
-        .sheet(isPresented: $adding) { NetworkDriveEditor(drive: nil) }
         .sheet(isPresented: $scanning) {
             CodeScanner { url in
                 scanning = false
@@ -699,7 +680,7 @@ struct ComputerOffer: Identifiable {
     }
 }
 
-/// One line on the PC, one scan here.
+/// One line on the PC, one scan here: a Scan Code button, and the line to copy for a PC that isn't set up yet.
 struct QuickSetupSection: View {
     /// No computers yet: says what this is for.
     var first = false
@@ -709,60 +690,90 @@ struct QuickSetupSection: View {
 
     var body: some View {
         Section {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(spacing: 14) {
                 if first {
-                    Text("Save from the Mac straight to your PC's Desktop, at home or away. Two steps:")
-                        .font(.system(size: 15)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Image(systemName: "qrcode.viewfinder")
+                        .font(.system(size: 44, weight: .light))
+                        .foregroundStyle(Desk.accentLight)
+                    Text("Save from the Mac straight to your PC")
+                        .font(.system(size: 17, weight: .semibold))
+                        .multilineTextAlignment(.center)
                 }
-                quickStep(1, "On the PC, right-click Start, choose Terminal, paste this and press Enter. Choose Yes when Windows asks.")
-                Text(NetworkDrives.pcCommand)
-                    .font(.system(size: 13, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Desk.page, in: RoundedRectangle(cornerRadius: 8))
+                if let scan {
+                    Button(action: scan) {
+                        Label("Scan Code", systemImage: "qrcode.viewfinder")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                } else {
+                    Text("Point the Camera at your PC's code and tap Open in Henge.")
+                        .font(.system(size: 15)).multilineTextAlignment(.center)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("No code on the PC yet? Paste this in its Terminal (right-click Start) and press Enter.")
+                    .font(.system(size: 14)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     Button {
                         UIPasteboard.general.string = NetworkDrives.pcCommand
                         copied = true
                     } label: {
-                        Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        Label(copied ? "Copied" : "Copy Line", systemImage: copied ? "checkmark" : "doc.on.doc")
                     }
                     .buttonStyle(.bordered)
                     ShareLink(item: NetworkDrives.pcCommand) { Label("Send to PC", systemImage: "square.and.arrow.up") }
                         .buttonStyle(.bordered)
                 }
-                quickStep(2, scan == nil
-                          ? "A code appears on the PC. Point this \(Device.name)'s Camera at it and tap Open in Henge. Done."
-                          : "A code appears on the PC. Scan it. Done.")
-                if let scan {
-                    Button(action: scan) {
-                        Label("Scan Code", systemImage: "qrcode.viewfinder")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
             }
             .padding(.vertical, 4)
         } header: {
             Text(first ? "Add Your PC" : "Add Another PC")
-        } footer: {
-            Text("It shares the PC's Desktop with a sign-in just for Henge, lets only this network and Tailscale through the firewall, and installs Tailscale so it works away from home too (sign in to Tailscale when the browser asks, with the same account on the Mac). To undo it all, run the same line with -Remove at the end.")
         }
         .listRowBackground(Desk.card)
     }
+}
 
-    private func quickStep(_ n: Int, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text("\(n)")
-                .font(.system(size: 13, weight: .bold))
-                .frame(width: 22, height: 22)
-                .background(Desk.accentLight.opacity(0.25), in: Circle())
-            Text(text).font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+/// Everything besides the code: entering a computer by hand, the guide, and (while a Mac runs) Tailscale on the Mac.
+struct ComputersMoreView: View {
+    var type: ((String) -> Void)?
+    @State private var adding = false
+
+    var body: some View {
+        Form {
+            Section {
+                Button { adding = true } label: { Label("Enter Details by Hand", systemImage: "keyboard") }
+                NavigationLink { NetworkDrivesGuide() } label: { Label("How to Set Up", systemImage: "book") }
+            } footer: {
+                Text("For a Mac, Linux or a NAS, or to set a PC up yourself.")
+            }
+            .listRowBackground(Desk.card)
+            if let type {
+                Section {
+                    Button { type(Sharing.tailscaleCommand) } label: { Label("Type the Tailscale Command", systemImage: "globe") }
+                } header: {
+                    Text("Away From Home (Experimental)")
+                } footer: {
+                    Text("Puts Tailscale on this Mac. Open Terminal on the Mac, tap this, press Return and type the Mac's password. The sign-in link lands on this \(Device.name)'s clipboard: open it in Safari and sign in with the same account as your PC.")
+                }
+                .listRowBackground(Desk.card)
+            }
+            Section {
+                Text("To undo the PC's setup, run the same line on it with -Remove at the end.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            .listRowBackground(Desk.card)
         }
+        .scrollContentBackground(.hidden)
+        .background(Desk.page)
+        .navigationTitle("More Options")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $adding) { NetworkDriveEditor(drive: nil) }
     }
 }
 

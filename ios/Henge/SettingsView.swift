@@ -70,7 +70,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Save to Your Computer")
                 } footer: {
-                    Text("Let the Mac save files straight to your laptop or desktop, such as its Desktop folder, over Wi-Fi or from anywhere with Tailscale.")
+                    Text("Scan a code from your PC and the Mac saves straight to it.")
                 }
                 .listRowBackground(Desk.card)
                 Section("Mouse") {
