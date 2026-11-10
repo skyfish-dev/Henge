@@ -611,6 +611,7 @@ static const char install_script[] =
     "launchctl bootout \"gui/$(id -u)/com.henge.agent\" 2>/dev/null\n"
     "curl -fsS http://" HV_SHARE_ADDR "/.henge/agent | gunzip > \"$D/henge-agent\" || { echo 'Could not reach Henge.'; exit 1; }\n"
     "chmod 755 \"$D/henge-agent\"\n"
+    "curl -fsS http://" HV_SHARE_ADDR "/.henge/agent-id > \"$D/henge-agent.id\" 2>/dev/null\n"
     "cat > \"$P\" <<EOF\n"
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
     "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
@@ -706,21 +707,48 @@ static const char unlighten_script[] =
     "echo 'Back as it was, apart from the wallpaper (System Settings, Wallpaper).'\n"
     "echo 'Log out and back in (or restart) for all of it to take effect.'\n";
 
-static int serve_agent(Conn *c, Request *r) {
-    if (body_discard(c, r) != 0) return -1;
+/* The helper the app carries (gzipped), malloc'd, or NULL. */
+static char *agent_read(size_t *len) {
     int fd = agent_path[0] ? open(agent_path, O_RDONLY) : -1;
     struct stat st;
     if (fd < 0 || fstat(fd, &st) != 0) {
         if (fd >= 0) close(fd);
-        return respond_empty(c, r, 404, "Not Found");
+        return NULL;
     }
-    char *data = malloc((size_t)st.st_size);
+    char *data = malloc((size_t)st.st_size + 1);
     ssize_t got = data ? pread(fd, data, (size_t)st.st_size, 0) : -1;
     close(fd);
-    int rc = got == st.st_size ? respond(c, r, 200, "OK", "Content-Type: application/octet-stream\r\n", data, (size_t)got)
-                               : respond_empty(c, r, 500, "Internal Server Error");
+    if (got != st.st_size) {
+        free(data);
+        return NULL;
+    }
+    *len = (size_t)got;
+    return data;
+}
+
+static int serve_agent(Conn *c, Request *r) {
+    if (body_discard(c, r) != 0) return -1;
+    size_t len = 0;
+    char *data = agent_read(&len);
+    if (!data) return respond_empty(c, r, 404, "Not Found");
+    int rc = respond(c, r, 200, "OK", "Content-Type: application/octet-stream\r\n", data, len);
     free(data);
     return rc;
+}
+
+/* Which helper the app carries: a hash of it. An installed helper that differs replaces itself with this one, so a
+   Henge update brings its helper along without the Set Up Command again. */
+static int serve_agent_id(Conn *c, Request *r) {
+    if (body_discard(c, r) != 0) return -1;
+    size_t len = 0;
+    char *data = agent_read(&len);
+    if (!data) return respond_empty(c, r, 404, "Not Found");
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < len; i++) h = (h ^ (unsigned char)data[i]) * 1099511628211ULL;
+    free(data);
+    char id[32];
+    int n = snprintf(id, sizeof id, "%016llx", (unsigned long long)h);
+    return respond(c, r, 200, "OK", "Content-Type: text/plain\r\nCache-Control: no-store\r\n", id, (size_t)n);
 }
 
 /* GET ?since=N waits up to 25 s for a newer clipboard than N. */
@@ -801,6 +829,7 @@ static int serve_henge(Conn *c, Request *r) {
         return respond(c, r, 200, "OK", "Content-Type: text/plain\r\n", tailscale_script, sizeof tailscale_script - 1);
     }
     if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
+    if (!strcmp(what, "agent-id") && !strcmp(r->method, "GET")) return serve_agent_id(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);
     if (!strcmp(what, "drives") && !strcmp(r->method, "GET")) return drives_get(c, r);

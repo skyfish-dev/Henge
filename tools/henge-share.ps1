@@ -3,9 +3,9 @@
 #   irm https://raw.githubusercontent.com/skyfish-dev/Henge/pointer-follow/tools/henge-share.ps1 | iex
 #
 # It shares the folder (the Desktop unless you pick another) with a separate sign-in that can only reach that
-# folder, lets file sharing through the firewall from this network and from Tailscale only, optionally sets up
-# Tailscale for using it away from home, then shows a code: scan it with the iPhone's Camera (or in Henge,
-# Settings, Computers, Scan Code) and Henge adds the PC. Run it again any time; it picks up where it left off.
+# folder, lets file sharing through the firewall from this network and from Tailscale only, sets up
+# Tailscale for using it away from home (unless -NoTailscale), then shows a code: scan it with the iPhone's
+# Camera (or in Henge, Settings, Computers, Scan Code) and Henge adds the PC, nothing to fill in. Run it again any time; it picks up where it left off.
 # To undo it: run it with -Remove.
 
 param([string]$Folder = "", [switch]$Remove, [switch]$NoTailscale)
@@ -99,28 +99,61 @@ Say "      from this network and Tailscale only"
 Step "4/5  Away from home (Tailscale)"
 $ts = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
 $TailscaleIP = ""
+function TailscaleIP { if (Test-Path $ts) { (& $ts ip -4 2>$null | Select-Object -First 1) } }
+
 if (-not $NoTailscale -and -not (Test-Path $ts)) {
-    $answer = Read-Host "      Set up Tailscale too, to save to this PC from anywhere? It's free. (Y/n)"
-    if ($answer -notmatch '^[nN]') {
+    Say "      Installing Tailscale (free)..."
+    try {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Say "      Installing Tailscale..."
             & winget install --id Tailscale.Tailscale -e --silent --accept-package-agreements --accept-source-agreements | Out-Null
-        } else {
-            Say "      Get Tailscale from https://tailscale.com/download/windows, then run this again." Yellow
         }
-    }
+        if (-not (Test-Path $ts)) {
+            # No winget (or it failed): Tailscale's own installer for this PC's processor.
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } elseif ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "x86" }
+            $msi = (Invoke-RestMethod "https://pkgs.tailscale.com/stable/?mode=json").MSIs.$arch
+            $file = Join-Path $env:TEMP $msi
+            Invoke-WebRequest "https://pkgs.tailscale.com/stable/$msi" -OutFile $file -UseBasicParsing
+            Start-Process msiexec -ArgumentList "/i", "`"$file`"", "/quiet", "/norestart" -Wait
+        }
+    } catch { }
+    for ($i = 0; $i -lt 20 -and -not (Test-Path $ts); $i++) { Start-Sleep -Seconds 1 }
+    if (-not (Test-Path $ts)) { Say "      Tailscale didn't install. It still works at home; for away, get it at tailscale.com/download." Yellow }
 }
-if (Test-Path $ts) {
-    $TailscaleIP = (& $ts ip -4 2>$null | Select-Object -First 1)
+
+if (-not $NoTailscale -and (Test-Path $ts)) {
+    for ($i = 0; $i -lt 10 -and -not $TailscaleIP; $i++) {
+        $TailscaleIP = TailscaleIP
+        if (-not $TailscaleIP) { Start-Sleep -Milliseconds 500 }
+    }
     if (-not $TailscaleIP) {
-        Say "      Sign in to Tailscale: open the link below if a browser doesn't open by itself (any account works)."
-        try { & $ts up --timeout=300s } catch { }
-        for ($i = 0; $i -lt 10 -and -not $TailscaleIP; $i++) {
-            $TailscaleIP = (& $ts ip -4 2>$null | Select-Object -First 1)
-            if (-not $TailscaleIP) { Start-Sleep -Seconds 1 }
+        # Signing in: `tailscale up` prints a link; open it, then wait for the address (or a key press to skip).
+        $log = Join-Path $env:TEMP "henge-tailscale.txt"
+        $up = $null
+        $tries = 0
+        Say "      Sign in to Tailscale in the browser (any Google, Microsoft or Apple account)." White
+        Say "      Use the same account later on the iPhone. Press any key here to skip: then it works at home only."
+        $opened = $false
+        $deadline = (Get-Date).AddMinutes(10)
+        while (-not $TailscaleIP -and (Get-Date) -lt $deadline) {
+            # Just installed, its service can take a moment to start: `up` gives up at once then, so try again.
+            if (-not $opened -and $tries -lt 8 -and (-not $up -or $up.HasExited)) {
+                $tries++
+                Remove-Item $log, "$log.out" -ErrorAction SilentlyContinue
+                $up = Start-Process $ts -ArgumentList "up", "--timeout=600s" -NoNewWindow -PassThru `
+                    -RedirectStandardError $log -RedirectStandardOutput "$log.out"
+                Start-Sleep -Seconds 2
+            }
+            if (-not $opened) {
+                $url = Select-String -Path $log, "$log.out" -Pattern 'https://login\.tailscale\.com/\S+' -ErrorAction SilentlyContinue |
+                    Select-Object -First 1 | ForEach-Object { $_.Matches[0].Value }
+                if ($url) { Start-Process $url; $opened = $true; Say "      $url" }
+            }
+            try { if ([Console]::KeyAvailable) { [void][Console]::ReadKey($true); break } } catch { }
+            Start-Sleep -Milliseconds 700
+            $TailscaleIP = TailscaleIP
         }
     }
-    if ($TailscaleIP) { Say "      Tailscale address $TailscaleIP" } else { Say "      Tailscale isn't signed in yet: run this again once it is." Yellow }
+    if ($TailscaleIP) { Say "      Tailscale address $TailscaleIP" } else { Say "      skipped for now: run this again any time to add it" Yellow }
 } else {
     Say "      skipped (this network only)"
 }
@@ -158,9 +191,9 @@ small{color:#6a6f7e}
 <p>$name &middot; $Folder</p>
 <div id="code"></div>
 <ol>
-<li>Open the iPhone's <b>Camera</b> and point it at the code, then tap <b>Open in Henge</b>.<br><small>Or in Henge: Settings, Computers, Scan Code.</small></li>
-<li>Tap <b>Add</b>.</li>
-<li>On the virtual Mac, the PC is in <b>Henge Drives</b> in your home folder, and in every Save dialog.</li>
+<li>Point the iPhone's <b>Camera</b> at the code and tap <b>Open in Henge</b>.<br><small>Or in Henge: Settings, Computers, Scan Code.</small></li>
+<li>That's it. On the virtual Mac, this PC is in <b>Henge Drives</b> in your home folder, and in every Save dialog.</li>
+<li><small>Away from home: install Tailscale on the iPhone and sign in with the same account as this PC.</small></li>
 </ol>
 <p><small>The code holds the password for the Henge sign-in on this PC. Close this page when you're done.</small></p>
 </main><script>

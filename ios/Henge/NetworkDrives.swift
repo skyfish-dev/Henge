@@ -25,8 +25,8 @@ final class NetworkDrives: ObservableObject {
     /// What the helper last said about each, by name: nil "ok", or why it couldn't connect.
     @Published private(set) var status: [String: String] = [:]
     @Published private(set) var heardFromMac = false
-    /// A computer from a henge://computer link (the code tools/henge-share.ps1 shows), waiting to be added.
-    @Published var offer: ComputerOffer?
+    /// A computer just added from a henge://computer link (the code tools/henge-share.ps1 shows), to say so.
+    @Published var added: AddedComputer?
 
     /// The one line that sets up a Windows PC (tools/henge-share.ps1).
     static let pcCommand = "irm https://raw.githubusercontent.com/skyfish-dev/Henge/pointer-follow/tools/henge-share.ps1 | iex"
@@ -81,12 +81,28 @@ final class NetworkDrives: ObservableObject {
         henge_share_set_drives(lines.joined(separator: "\n") + "\n")
     }
 
-    /// henge://computer?n=name&h=host,host&s=share&u=user&p=password: offers the computer. False for other links.
+    /// henge://computer?n=name&h=host,host&s=share&u=user&p=password: adds the computer straight away, nothing
+    /// to fill in. False for other links.
     @discardableResult
     func open(_ url: URL) -> Bool {
         guard let offer = ComputerOffer(url) else { return false }
-        self.offer = offer
+        added = add(offer)
         return true
+    }
+
+    /// Saves the computer in a code. Scanned again (a new password, a new address), it updates the one already here.
+    func add(_ offer: ComputerOffer) -> AddedComputer {
+        if var drive = existing(offer) {
+            drive.host = offer.host
+            drive.user = offer.user
+            save(drive, password: offer.password)
+            return AddedComputer(name: drive.name, updated: true)
+        }
+        let id = UUID()
+        let drive = NetworkDrive(id: id, name: uniqueName(offer.name, except: id), host: offer.host,
+                                 share: offer.share, user: offer.user)
+        save(drive, password: offer.password)
+        return AddedComputer(name: drive.name, updated: false)
     }
 
     /// The drive already saved for the same folder on the same computer, if any: a code scanned again updates it.
@@ -237,36 +253,28 @@ struct NetworkDrivesView: View {
     @State private var editing: NetworkDrive?
     @State private var adding = false
     @State private var scanning = false
-    @State private var scanned: ComputerOffer?
+    @State private var justAdded: AddedComputer?
     var running = false
     /// In a running Mac's Details: types a command into the Mac's Terminal.
     var type: ((String) -> Void)? = nil
 
     var body: some View {
         Form {
-            Section {
-                if store.drives.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label("No computers yet", systemImage: "desktopcomputer")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("Add a computer to save files from the Mac straight to it, like your laptop's Desktop.")
-                            .font(.footnote).foregroundStyle(.secondary)
+            if !store.drives.isEmpty {
+                Section {
+                    ForEach(store.drives) { drive in
+                        Button { editing = drive } label: { row(drive) }
+                            .foregroundStyle(Desk.text)
                     }
-                    .padding(.vertical, 4)
+                    .onDelete { offsets in offsets.map { store.drives[$0] }.forEach(store.remove) }
+                } footer: {
+                    Text("On the Mac, each one is in Finder under Henge Drives in your home folder, and in every app's Save dialog. Drag Henge Drives to Finder's sidebar to keep it one click away.")
                 }
-                ForEach(store.drives) { drive in
-                    Button { editing = drive } label: { row(drive) }
-                        .foregroundStyle(Desk.text)
-                }
-                .onDelete { offsets in offsets.map { store.drives[$0] }.forEach(store.remove) }
-                if DataScannerViewController.isSupported {
-                    Button { scanning = true } label: { Label("Scan Code", systemImage: "qrcode.viewfinder") }
-                }
-                Button { adding = true } label: { Label("Add Computer", systemImage: "plus.circle.fill") }
-            } footer: {
-                Text("On the Mac, each one is in Finder under Henge Drives in your home folder, and in every app's Save dialog. Drag Henge Drives to Finder's sidebar to keep it one click away.")
+                .listRowBackground(Desk.card)
             }
-            .listRowBackground(Desk.card)
+
+            QuickSetupSection(first: store.drives.isEmpty,
+                              scan: DataScannerViewController.isSupported ? { scanning = true } : nil)
 
             if running, !store.drives.isEmpty, oldHelper, let type {
                 Section {
@@ -276,7 +284,6 @@ struct NetworkDrivesView: View {
                 }
                 .listRowBackground(Desk.card)
             }
-            QuickSetupSection()
             if running, let type {
                 Section {
                     Button { type(Sharing.tailscaleCommand) } label: {
@@ -290,9 +297,12 @@ struct NetworkDrivesView: View {
                 .listRowBackground(Desk.card)
             }
             Section {
+                Button { adding = true } label: { Label("Enter Details by Hand", systemImage: "keyboard") }
                 NavigationLink { NetworkDrivesGuide() } label: { Label("How to Set Up", systemImage: "book") }
+            } header: {
+                Text("A Mac, Linux or a NAS")
             } footer: {
-                Text("Windows, a Mac or Linux, at home or away. The Mac needs Henge's helper (Details, Type the Set Up Command), installed again after Henge updates.")
+                Text("For computers that aren't Windows PCs, or to set a PC up yourself. The guide covers Windows, a Mac and Linux, at home or away.")
             }
             .listRowBackground(Desk.card)
         }
@@ -300,16 +310,21 @@ struct NetworkDrivesView: View {
         .background(Desk.page)
         .navigationTitle("Computers")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { EditButton() }
+        .toolbar { if !store.drives.isEmpty { EditButton() } }
         .sheet(isPresented: $adding) { NetworkDriveEditor(drive: nil) }
         .sheet(isPresented: $scanning) {
             CodeScanner { url in
                 scanning = false
-                // Here rather than through the app's own sheet: this list can itself be in a sheet (a Mac's Details).
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { scanned = ComputerOffer(url) }
+                // Said here rather than by the app's own alert: this list can itself be in a sheet (a Mac's Details).
+                guard let offer = ComputerOffer(url) else { return }
+                let result = store.add(offer)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { justAdded = result }
             }
         }
-        .sheet(item: $scanned) { NetworkDriveEditor(offer: $0) }
+        .alert(justAdded?.title ?? "", isPresented: Binding(get: { justAdded != nil }, set: { if !$0 { justAdded = nil } }),
+               presenting: justAdded) { _ in
+            Button("OK") {}
+        } message: { Text($0.message) }
         .sheet(item: $editing) { NetworkDriveEditor(drive: $0) }
         .task {
             guard running else { return }
@@ -541,7 +556,7 @@ struct NetworkDrivesGuide: View {
             }
             if kind == .windows {
                 Section {
-                    Text("The quickest way: Settings, Computers, Set Up a PC in One Step. One line on the PC does all of the below, then you scan a code. The steps here are for doing it by hand.")
+                    Text("The quickest way: Settings, Computers, Add Your PC. One line on the PC does all of the below, then you scan a code. The steps here are for doing it by hand.")
                         .font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
                 }
                 .listRowBackground(Desk.card)
@@ -612,7 +627,7 @@ struct NetworkDrivesGuide: View {
 
     private var onTheMac: some View {
         steps("In Henge", [
-            "Settings, Computers, Add Computer: enter the address, the shared folder's name and the sign-in, then Check Connection.",
+            "Settings, Computers, Enter Details by Hand: enter the address, the shared folder's name and the sign-in, then Check Connection.",
             "Start your Mac. If you haven't yet, set up Henge's helper: Details, Type the Set Up Command, then Return in Terminal. After a Henge update, do it once more so the helper can mount computers.",
             "In a few seconds the computer shows as Connected in Details, Computers. On the Mac it's in your home folder, Henge Drives. In any Save dialog, pick it there (or drag Henge Drives to Finder's sidebar first).",
             "The first time, iOS asks whether Henge may find devices on the local network: choose Allow.",
@@ -653,6 +668,19 @@ struct NetworkDrivesGuide: View {
 
 // MARK: - Setting up a PC in one step
 
+/// What a scanned code did, to tell the person.
+struct AddedComputer: Identifiable {
+    let id = UUID()
+    let name: String
+    let updated: Bool
+
+    var title: String { updated ? "\(name) Updated" : "\(name) Added" }
+    var message: String {
+        "On the Mac, it's in Finder under Henge Drives in your home folder, and in every Save dialog. "
+            + "If the Mac is already running, it shows up within a few seconds."
+    }
+}
+
 /// A computer from a henge://computer link: what tools/henge-share.ps1 set up, in the code it shows.
 struct ComputerOffer: Identifiable {
     let id = UUID()
@@ -673,12 +701,21 @@ struct ComputerOffer: Identifiable {
 
 /// One line on the PC, one scan here.
 struct QuickSetupSection: View {
+    /// No computers yet: says what this is for.
+    var first = false
+    /// Opens the scanner; nil where this device can't scan codes (then the Camera app does it).
+    var scan: (() -> Void)?
     @State private var copied = false
 
     var body: some View {
         Section {
-            VStack(alignment: .leading, spacing: 10) {
-                quickStep(1, "On your Windows PC, open PowerShell (right-click Start, Terminal) and run:")
+            VStack(alignment: .leading, spacing: 12) {
+                if first {
+                    Text("Save from the Mac straight to your PC's Desktop, at home or away. Two steps:")
+                        .font(.system(size: 15)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                quickStep(1, "On the PC, right-click Start, choose Terminal, paste this and press Enter. Choose Yes when Windows asks.")
                 Text(NetworkDrives.pcCommand)
                     .font(.system(size: 13, design: .monospaced))
                     .textSelection(.enabled)
@@ -696,14 +733,24 @@ struct QuickSetupSection: View {
                     ShareLink(item: NetworkDrives.pcCommand) { Label("Send to PC", systemImage: "square.and.arrow.up") }
                         .buttonStyle(.bordered)
                 }
-                quickStep(2, "Choose Yes when Windows asks. It shares your Desktop, and can set up Tailscale for saving from anywhere.")
-                quickStep(3, "A code appears on the PC. Scan it with this \(Device.name)'s Camera, or with Scan Code above, and tap Add.")
+                quickStep(2, scan == nil
+                          ? "A code appears on the PC. Point this \(Device.name)'s Camera at it and tap Open in Henge. Done."
+                          : "A code appears on the PC. Scan it. Done.")
+                if let scan {
+                    Button(action: scan) {
+                        Label("Scan Code", systemImage: "qrcode.viewfinder")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                }
             }
             .padding(.vertical, 4)
         } header: {
-            Text("Set Up a PC in One Step")
+            Text(first ? "Add Your PC" : "Add Another PC")
         } footer: {
-            Text("The PC gets a sign-in just for Henge that reaches only the shared folder, and its firewall lets in only this network and Tailscale. To undo it, run the same line with -Remove at the end.")
+            Text("It shares the PC's Desktop with a sign-in just for Henge, lets only this network and Tailscale through the firewall, and installs Tailscale so it works away from home too (sign in to Tailscale when the browser asks, with the same account on the Mac). To undo it all, run the same line with -Remove at the end.")
         }
         .listRowBackground(Desk.card)
     }

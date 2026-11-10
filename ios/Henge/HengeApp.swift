@@ -70,7 +70,10 @@ struct RootView: View {
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $jit.showSetup) { JITSetupFlow() }
-        .sheet(item: $drives.offer) { NetworkDriveEditor(offer: $0) }
+        .alert(drives.added?.title ?? "", isPresented: Binding(get: { drives.added != nil }, set: { if !$0 { drives.added = nil } }),
+               presenting: drives.added) { _ in
+            Button("OK") {}
+        } message: { Text($0.message) }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             machines.collectImports()

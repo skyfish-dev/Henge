@@ -196,6 +196,35 @@ static NSString *plainError(NSString *said) {
     return said.length ? said : @"It couldn't be connected.";
 }
 
+// The app carries a helper; when it isn't this one (Henge was updated), this one is replaced by it and quits, and
+// launchd starts the new one (KeepAlive). Installed by an older script, there's no record: the first look makes one.
+static void updateSelf(void) {
+    int status = 0;
+    NSData *idData = request(@"GET", @"/.henge/agent-id", nil, &status, NULL);
+    if (!idData || status != 200) return; // a Henge from before this
+    NSString *served = [[[NSString alloc] initWithData:idData encoding:NSUTF8StringEncoding]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *me = NSProcessInfo.processInfo.arguments.firstObject;
+    if (!served.length || !me.length) return;
+    NSString *idPath = [me stringByAppendingString:@".id"];
+    NSString *mine = [[NSString stringWithContentsOfFile:idPath encoding:NSUTF8StringEncoding error:NULL]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if ([served isEqualToString:mine]) return;
+    NSData *gz = request(@"GET", @"/.henge/agent", nil, &status, NULL);
+    if (!gz.length || status != 200) return;
+    NSString *gzPath = [me stringByAppendingString:@".new.gz"], *newPath = [me stringByAppendingString:@".new"];
+    if (![gz writeToFile:gzPath atomically:YES]) return;
+    int rc = runTool(@"/bin/sh", @[ @"-c", @"/usr/bin/gunzip -c \"$0\" > \"$1\" && chmod 755 \"$1\"", gzPath, newPath ], NULL);
+    unlink(gzPath.fileSystemRepresentation);
+    if (rc != 0 || rename(newPath.fileSystemRepresentation, me.fileSystemRepresentation) != 0) {
+        unlink(newPath.fileSystemRepresentation);
+        return;
+    }
+    [served writeToFile:idPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    NSLog(@"henge-agent: updated to %@, restarting", served);
+    exit(0);
+}
+
 // The app's list (host/share.c, /.henge/drives): name TAB host TAB share TAB user TAB password, a line each.
 // Each is kept mounted on ~/Henge Drives/<name>; one taken off the list is unmounted. How it went goes back.
 static void keepDrivesMounted(void) {
@@ -254,6 +283,12 @@ int main(void) {
         keepMounted();
         // One at a time, off the main thread: a computer that doesn't answer can hold a mount for a while.
         dispatch_queue_t drives = dispatch_queue_create("henge.drives", DISPATCH_QUEUE_SERIAL);
+        // A newer helper in the app takes over: now, and every few minutes (Henge can be updated while macOS runs).
+        dispatch_async(drives, ^{ updateSelf(); });
+        [NSTimer scheduledTimerWithTimeInterval:300 repeats:YES block:^(NSTimer *timer) {
+            (void)timer;
+            dispatch_async(drives, ^{ updateSelf(); });
+        }];
         dispatch_async(drives, ^{ keepDrivesMounted(); });
         [NSTimer scheduledTimerWithTimeInterval:15 repeats:YES block:^(NSTimer *timer) {
             (void)timer;
