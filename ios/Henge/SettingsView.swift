@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage(HardwareMouse.speedKey) private var mouseSpeed = 1.0
     @AppStorage(HardwareMouse.reverseKey) private var reverseScrolling = false
     @AppStorage(HardwareMouse.scrollSpeedKey) private var scrollSpeed = 0.3
+    @AppStorage(PointerFollow.modeKey) private var followMode = PointerFollow.Mode.auto.rawValue
     @AppStorage(VolumeClicks.inputModeKey) private var inputMode = VolumeClicks.InputMode.touchscreen
     @AppStorage(VolumeClicks.modeKey) private var volumeMode = VolumeClicks.Mode.delayHold
     @AppStorage(VolumeClicks.swapKey) private var swapButtons = false
@@ -57,6 +58,14 @@ struct SettingsView: View {
                     Text(Entitlements.increasedMemory
                          ? "A Mac's memory is kept out of this limit once JIT is on. If iOS refuses that, it uses free storage instead."
                          : "This install isn't signed with the increased memory limit entitlement. Reinstall Henge with a certificate that has it. Export your Mac first if the reinstall replaces the app's data.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                .listRowBackground(Desk.card)
+                Section("Mouse") {
+                    Picker("Match iOS's pointer", selection: $followMode) {
+                        ForEach(PointerFollow.Mode.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    Text("When iOS shows its own pointer (always on iPhone, where a Bluetooth mouse goes through AssistiveTouch), the Mac's pointer goes where it is and clicks land there. Automatic does this unless iPadOS has handed the pointer to Henge; Never moves the Mac's pointer by the mouse's own motion only.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)

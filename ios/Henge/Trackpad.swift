@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import GameController
 
 /// A surface that works like a Mac's trackpad — it is one: the engine presents it on
 /// the Mac's USB bus as a Magic Trackpad 2, so the Mac's own multitouch engine sees
@@ -12,13 +13,21 @@ import UIKit
 ///    down so moving drags. These go out as mouse buttons alongside the pad's fingers.
 ///  - Volume buttons: the surface only points and gestures; the clicks live on the
 ///    volume keys (VolumeClicks), so a tap here does nothing.
-/// Only fingers count: a real trackpad or mouse goes through HardwareMouse.
+/// Only fingers count: a real trackpad or mouse goes through HardwareMouse. Where iOS shows its own pointer
+/// over the Mac's screen, that pointer's hovers and clicks say where the Mac's pointer goes (PointerFollow).
 struct Trackpad: UIViewRepresentable {
     /// Four fingers tapped together: the session shows its hidden controls.
     static let revealTap = Notification.Name("henge.trackpad.revealTap")
 
-    func makeUIView(context: Context) -> Surface { Surface() }
-    func updateUIView(_ view: Surface, context: Context) {}
+    /// For a surface over the Mac's screen: a point in the surface, as 0...1 of the Mac's screen, or nil off it.
+    var map: ((CGPoint) -> CGPoint?)? = nil
+
+    func makeUIView(context: Context) -> Surface {
+        let surface = Surface()
+        surface.map = map
+        return surface
+    }
+    func updateUIView(_ view: Surface, context: Context) { view.map = map }
 
     final class Surface: UIView, UIPointerInteractionDelegate {
         /// The emulated pad's sensor, in the Magic Trackpad 2's own units.
@@ -43,17 +52,84 @@ struct Trackpad: UIViewRepresentable {
         private let buzz = UIImpactFeedbackGenerator(style: .medium)
         private var tapsClick: Bool { VolumeClicks.inputMode == .touchscreen }
 
+        /* iOS's own pointer (PointerFollow). */
+        var map: ((CGPoint) -> CGPoint?)?
+        /// Touches made by a mouse's button rather than by fingers: they say where the Mac's pointer goes.
+        private var pointerTouches: Set<UITouch> = []
+        private var pointerPressed = false
+        private var pointerTouchesLogged = 0, hoversLogged = 0
+
         override init(frame: CGRect) {
             super.init(frame: frame)
             isMultipleTouchEnabled = true
             backgroundColor = .clear
             addInteraction(UIPointerInteraction(delegate: self))
+            addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
         }
 
         /// Over the Mac there is only the Mac's pointer, if iPadOS hasn't locked its own away.
         func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? { .hidden() }
 
         required init?(coder: NSCoder) { fatalError("made in code") }
+
+        @objc private func hovered(_ hover: UIHoverGestureRecognizer) {
+            guard hover.state == .began || hover.state == .changed, let map, let p = map(hover.location(in: self)) else { return }
+            if hoversLogged < 3 {
+                hoversLogged += 1
+                HengeLog.log("input", "hover from iOS's pointer; following: \(PointerFollow.shared.active)")
+            }
+            PointerFollow.shared.hovered(p)
+        }
+
+        /// A mouse's touch, rather than a finger's. iPadOS marks it as one. On iPhone a mouse works through
+        /// AssistiveTouch, whose clicks come as ordinary touches: with a mouse connected, a touch over the Mac
+        /// is taken to be its click.
+        private func isPointer(_ touch: UITouch) -> Bool {
+            guard PointerFollow.shared.active, map != nil else { return false }
+            if touch.type == .indirectPointer { return true }
+            return !Device.isPad && (GCMouse.current != nil || PointerFollow.mode == .on)
+        }
+
+        /// Takes the touches that are a mouse's out of `touches` and handles them; returns the fingers.
+        private func pointerPhase(_ touches: Set<UITouch>, began: Bool = false, ended: Bool = false) -> Set<UITouch> {
+            if began, pointerTouchesLogged < 6, let t = touches.first {
+                pointerTouchesLogged += 1
+                HengeLog.log("input", "touch type \(t.type.rawValue), mouse connected \(GCMouse.current != nil), following \(PointerFollow.shared.active)")
+            }
+            var rest = Set<UITouch>()
+            for touch in touches {
+                if began {
+                    guard isPointer(touch) else {
+                        // With the pointer locked, GameController has a mouse's clicks (HardwareMouse).
+                        if touch.type != .indirectPointer { rest.insert(touch) }
+                        continue
+                    }
+                    guard let map, let p = map(touch.location(in: self)) else { continue } // off the Mac's screen
+                    pointerTouches.insert(touch)
+                    PointerFollow.shared.aim(p)
+                    // A mouse whose buttons GameController reports clicks by itself (HardwareMouse).
+                    PointerFollow.shared.afterArriving { [weak self] in
+                        guard let self, !HardwareMouse.shared.buttonsSeen, !self.pointerPressed else { return }
+                        self.pointerPressed = true
+                        henge_vm_mouse_button(0, 1)
+                    }
+                } else if pointerTouches.contains(touch) {
+                    if let map, let p = map(touch.location(in: self)) { PointerFollow.shared.aim(p) }
+                    guard ended else { continue }
+                    pointerTouches.remove(touch)
+                    guard pointerTouches.isEmpty else { continue }
+                    PointerFollow.shared.afterArriving { [weak self] in
+                        guard let self, self.pointerPressed else { return }
+                        self.pointerPressed = false
+                        henge_vm_mouse_button(0, 0)
+                        StickyKeys.shared.releaseAll()
+                    }
+                } else {
+                    rest.insert(touch)
+                }
+            }
+            return rest
+        }
 
         /// Where the finger is on the pad's sensor, in its units.
         private func sensor(_ t: UITouch) -> (Int32, Int32) {
@@ -77,7 +153,7 @@ struct Trackpad: UIViewRepresentable {
         private static func ms(_ t: TimeInterval) -> UInt32 { UInt32(truncatingIfNeeded: Int(t * 1000)) }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-            let touches = touches.filter { $0.type != .indirectPointer }
+            let touches = pointerPhase(touches, began: true)
             guard !touches.isEmpty else { return }
             if fingers.isEmpty {
                 started = Date()
@@ -110,6 +186,7 @@ struct Trackpad: UIViewRepresentable {
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+            let touches = pointerPhase(touches)
             var moved = false
             let ts = Self.ms(event?.timestamp ?? touches.first?.timestamp ?? 0)
             for t in touches where t.type != .indirectPointer {
@@ -131,6 +208,7 @@ struct Trackpad: UIViewRepresentable {
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches) }
 
         private func lift(_ touches: Set<UITouch>) {
+            let touches = pointerPhase(touches, ended: true)
             var lifted: [Int32] = []
             fingers.removeAll { finger in
                 guard touches.contains(finger.touch), finger.touch.type != .indirectPointer else { return false }

@@ -25,6 +25,7 @@ struct SessionView: View {
     @AppStorage("henge.cursor.scale") private var cursorScale = Device.isPad ? 1 : 3
     @AppStorage("henge.cursor.sharp") private var sharpCursor = true
     @AppStorage(HardwareMouse.scrollSpeedKey) private var scrollSpeed = 0.3
+    @AppStorage(PointerFollow.modeKey) private var followMode = PointerFollow.Mode.auto.rawValue
 
     @State private var typing = false
     @State private var zoomed = false
@@ -82,7 +83,7 @@ struct SessionView: View {
                         }
                     }
                     .position(x: layout.screen.midX, y: layout.screen.midY)
-                Trackpad()
+                Trackpad(map: layout.toMac)
                     .frame(width: layout.touch.width, height: layout.touch.height)
                     .position(x: layout.touch.midX, y: layout.touch.midY)
                 if inputMode == .volumeButtons && volumeMode == .intercept {
@@ -183,6 +184,7 @@ struct SessionView: View {
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
+            PointerFollow.shared.screen = CGSize(width: mac.screen.width, height: mac.screen.height)
             HardwareMouse.shared.start()
             VolumeClicks.shared.start()
         }
@@ -213,6 +215,16 @@ struct SessionView: View {
         let pad: CGRect
         let insets: EdgeInsets
         var barY: CGFloat?    // where the controls go in the space beside the screen, if it has room for them
+
+        /// A point in the surface over the screen (`touch`), as 0...1 of the Mac's screen; nil off it.
+        var toMac: (CGPoint) -> CGPoint? {
+            let screen = screen, touch = touch
+            return { p in
+                let x = p.x + touch.minX, y = p.y + touch.minY
+                guard screen.width > 0, screen.height > 0, screen.contains(CGPoint(x: x, y: y)) else { return nil }
+                return CGPoint(x: (x - screen.minX) / screen.width, y: (y - screen.minY) / screen.height)
+            }
+        }
 
         var shown: CGSize {
             CGSize(width: min(touch.width / max(screen.width, 1), 1), height: min(touch.height / max(screen.height, 1), 1))
@@ -484,6 +496,9 @@ struct SessionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Pointer") {
+                    Picker("Match iOS's pointer", selection: $followMode) {
+                        ForEach(PointerFollow.Mode.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
                     Picker("Size", selection: $cursorScale) {
                         Text("1×").tag(1)
                         Text("2×").tag(2)

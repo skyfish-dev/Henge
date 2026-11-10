@@ -162,12 +162,15 @@ final class HardwareMouse {
     private var reverse = false
     private var scrollsLogged = 0 // the first few, to see what a device's raw values look like
     private var lastScrollFirst: Float = 0, lastScrollSecond: Float = 0
+    /// GameController reports this mouse's buttons. On iPhone, AssistiveTouch may give only touches.
+    private(set) var buttonsSeen = false
 
     func start() {
         let defaults = UserDefaults.standard
         speed = defaults.object(forKey: Self.speedKey) == nil ? 1 : Float(defaults.double(forKey: Self.speedKey))
         reverse = defaults.bool(forKey: Self.reverseKey)
         releaseButtons()
+        buttonsSeen = false
         let swapButtons = defaults.bool(forKey: PhysicalMouseButtons.swapKey)
         buttons = PhysicalMouseButtons(swapsRightAndMiddle: swapButtons)
         buttonsLogged = 0
@@ -194,6 +197,7 @@ final class HardwareMouse {
 
     func stop() {
         PointerLock.set(false)
+        PointerFollow.shared.reset()
         releaseButtons()
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
@@ -225,6 +229,9 @@ final class HardwareMouse {
 
     /// GameController's Y runs upward. What doesn't make a whole step yet waits for the next move.
     private func moved(_ dx: Float, _ dy: Float) {
+        // iOS's own pointer is on show and says where the Mac's goes (PointerFollow). The raw motion would
+        // move the Mac's a second time, by macOS's acceleration rather than iOS's, and the two would part.
+        if PointerFollow.shared.hoverDrives { return }
         restX += dx * speed
         restY -= dy * speed
         let x = restX.rounded(), y = restY.rounded()
@@ -240,7 +247,12 @@ final class HardwareMouse {
             buttonsLogged += 1
             HengeLog.log("input", "physical mouse button: raw=\(physicalButton) guest=\(guestButton) \(pressed ? "down" : "up")")
         }
-        henge_vm_mouse_button(guestButton, pressed ? 1 : 0)
+        if !buttonsSeen {
+            buttonsSeen = true
+            HengeLog.log("input", "mouse buttons come through GameController; following iOS's pointer: \(PointerFollow.shared.active)")
+        }
+        // A click goes where iOS's pointer is, once the Mac's has got there (at once when not following).
+        PointerFollow.shared.afterArriving(waitForPlace: pressed) { henge_vm_mouse_button(guestButton, pressed ? 1 : 0) }
         if !pressed { StickyKeys.shared.releaseAll() }
     }
 
